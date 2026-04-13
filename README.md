@@ -10,6 +10,7 @@ The main script scans a local `Paper/` directory and supports two extraction mod
 
 - `text`: read the PDF locally with `pypdf`, select evidence-focused text, and send only that text to the API
 - `text_full`: read the PDF locally with `pypdf` and send the extracted text in page order up to the character budget
+- `text_full_chunked`: read the whole extracted PDF text locally, split it into sequential chunks under the character budget, send every chunk, and merge the results
 - `pdf_direct`: upload the local PDF itself through the Files API and pass it to the Responses API as an `input_file`
 
 In both modes, the script extracts:
@@ -97,6 +98,23 @@ python3 scripts/extract_metrics_batch.py \
   --char-budget 80000
 ```
 
+Full-paper chunked mode:
+
+```bash
+export OPENAI_API_KEY=your_key
+
+python3 scripts/extract_metrics_batch.py \
+  --paper-root Paper \
+  --provider openai \
+  --base-url https://api.openai.com/v1 \
+  --model gpt-4.1 \
+  --api-key-env OPENAI_API_KEY \
+  --input-mode text_full_chunked \
+  --run-name chatgpt_gpt41_textfullchunked_v1 \
+  --limit 10 \
+  --char-budget 80000
+```
+
 Direct PDF mode with official OpenAI:
 
 ```bash
@@ -165,8 +183,11 @@ The structured outputs also include context diagnostics:
 - `sent_page_count`
 - `sent_char_count`
 - `truncated`
+- `evidence_snippets`
+- `evidence_page_numbers`
+- `context_page_numbers`
 
-These fields help you judge whether `text` or `text_full` sent only part of the extracted paper text.
+These fields help you judge whether `text` or `text_full` sent only part of the extracted paper text, and they expose the evidence snippets/pages used for manual checking. In `text_full_chunked`, all extracted pages are covered unless a single page itself exceeds the chunk budget.
 
 ## CLI Parameters
 
@@ -209,7 +230,9 @@ or
 ## Development Notes
 
 - The extractor uses `pypdf` for local text extraction.
-- It sends only a selected subset of pages to the LLM rather than the full PDF text.
+- `text` sends only a selected subset of pages to the LLM.
+- `text_full` sends as much page-ordered full text as fits in one request.
+- `text_full_chunked` covers the whole extracted PDF by sending all page-ordered chunks sequentially and merging the results.
 - In `pdf_direct` mode, it uploads the local PDF to the OpenAI Files API and deletes the uploaded file after each request by default.
 - `pdf_direct` is validated against official OpenAI. A third-party compatible endpoint may support it, but that depends on whether it also implements the Files API and Responses API file input flow.
 - It does not hard-code provider-specific logic.

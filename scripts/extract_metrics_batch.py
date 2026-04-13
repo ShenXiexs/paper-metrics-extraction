@@ -32,16 +32,10 @@ LOGGER = logging.getLogger("extract_metrics_batch")
 ALLOWED_METRIC_CATEGORIES = [
     "Accuracy",
     "AUC",
-    "ROC-AUC",
-    "PR-AUC",
     "Sensitivity",
     "Specificity",
     "Precision",
     "F1",
-    "Dice",
-    "IoU",
-    "MAE",
-    "RMSE",
 ]
 ALLOWED_METHODS = [
     "cross_validation",
@@ -98,26 +92,22 @@ Core extraction rules:
 3. If multiple models are reported, keep only the best-performing or most emphasized result set.
 4. Ensure strict one-to-one mapping between each metric and each reported value.
 5. If a metric is mentioned but no concrete value is reported, set its value to "Not reported".
-6. Only keep metrics that are genuinely predictive or classification performance metrics. Do NOT extract intervention effectiveness statistics, hypothesis-test outputs, questionnaire score changes, usability scores, p-values, effect sizes, mean differences, or baseline/follow-up scale scores unless they are directly used as prediction performance metrics.
-7. If the paper does not report any quantitative metrics relevant to prediction, classification, screening, recognition, or detection, set has_quantitative_metrics to false and return an empty metrics array.
-8. Return a single JSON object only. Do not use Markdown. Do not add commentary.
+6. Keep model-performance metrics reported for mental-health-related systems, including direct disorder prediction / screening / classification tasks and component-level classification or detection tasks that are part of the system (for example, cognitive distortion classification, risk classification, intent classification within a mental-health chatbot pipeline).
+7. Do NOT extract intervention effectiveness statistics, hypothesis-test outputs, questionnaire score changes, usability scores, p-values, effect sizes, mean differences, or baseline/follow-up scale scores unless they are explicitly used as model-performance metrics.
+8. If the paper does not report any relevant model-performance metrics, set has_quantitative_metrics to false and return an empty metrics array.
+9. Return a single JSON object only. Do not use Markdown. Do not add commentary.
+10. For each extracted metric item, normalize its category to one of these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, or Other:<raw_name>. A paper may contain multiple metric items and multiple categories. Map ROC-AUC / AUROC into AUC. Put PR-AUC, Dice, IoU, MAE, RMSE, MCC, and other predictive metrics into Other:<raw_name> instead of creating new top-level groups.
 
-Normalize metric categories to one of:
+For each metric item, normalize its category to one of:
 - Accuracy
 - AUC
-- ROC-AUC
-- PR-AUC
 - Sensitivity
 - Specificity
 - Precision
 - F1
-- Dice
-- IoU
-- MAE
-- RMSE
 - Other:<raw_name>
 
-Normalize evaluation method to the most appropriate one from:
+Normalize evaluation methods to zero or more of:
 - cross_validation
 - independent_test_set
 - external_validation
@@ -159,26 +149,22 @@ Expected JSON schema:
 3. 若有多个模型，只保留论文中表现最优或作者最强调的一组结果。
 4. 必须保证“指标-数值”严格一一对应。
 5. 若提到了某个指标但没有给出具体数值，则该指标的数值写为“未报告数值”。
-6. 只保留真正属于预测性能、分类性能、筛查性能、识别性能的指标。不要提取干预效果统计、假设检验结果、问卷分数变化、可用性分数、p 值、effect size、mean difference、基线/随访量表分数，除非这些量本身被直接作为预测性能指标使用。
-7. 若论文没有报告与预测、分类、筛查、识别、检测相关的定量指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
-8. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
+6. 允许提取心理健康相关系统中的模型性能指标，包括直接的精神疾病预测/筛查/分类任务，也包括系统内部与心理健康相关的组件级分类或检测任务，例如认知扭曲分类、风险分类、聊天机器人流程中的意图分类等。
+7. 不要提取干预效果统计、假设检验结果、问卷分数变化、可用性分数、p 值、effect size、mean difference、基线/随访量表分数，除非这些量被明确作为模型性能指标使用。
+8. 若论文没有报告相关的模型性能指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
+9. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
+10. 对每一个提取出的指标项，都要把其类别归到这些高层类别之一：Accuracy、AUC、Sensitivity、Specificity、Precision、F1 或 Other:<raw_name>。同一篇论文可以同时包含多个指标项和多个类别。其中 ROC-AUC / AUROC 统一并入 AUC；PR-AUC、Dice、IoU、MAE、RMSE、MCC 等其他预测性能指标统一写为 Other:<raw_name>，不要新增新的一级类别。
 
-指标类别标准化为以下之一：
+对每一个指标项，类别标准化为以下之一：
 - Accuracy
 - AUC
-- ROC-AUC
-- PR-AUC
 - Sensitivity
 - Specificity
 - Precision
 - F1
-- Dice
-- IoU
-- MAE
-- RMSE
 - Other:<raw_name>
 
-评估方法标准化为以下最合适的一项：
+评估方法标准化为以下零个或多个：
 - cross_validation
 - independent_test_set
 - external_validation
@@ -252,6 +238,7 @@ class PaperRecord:
     has_quantitative_metrics: bool
     metrics: list[dict[str, Any]]
     evaluation_methods: list[str]
+    evaluation_method_source: str
     evidence: list[dict[str, Any]]
     final_line: str
     confidence: float | None
@@ -270,9 +257,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name", required=True, help="Output directory name under results/.")
     parser.add_argument(
         "--input-mode",
-        choices=["text", "text_full", "pdf_direct"],
+        choices=["text", "text_full", "text_full_chunked", "pdf_direct"],
         default="text",
-        help="Use selective local PDF-to-text extraction, fuller local PDF-to-text extraction, or upload the PDF directly to the API.",
+        help="Use selective local PDF-to-text extraction, fuller local PDF-to-text extraction, full-paper chunked extraction, or upload the PDF directly to the API.",
     )
     parser.add_argument(
         "--prompt-language",
@@ -515,6 +502,52 @@ def build_full_context(pages: list[str], char_budget: int) -> tuple[str, list[in
     return "\n".join(pieces).strip(), kept_pages
 
 
+def build_full_context_chunks(pages: list[str], char_budget: int) -> tuple[list[tuple[str, list[int]]], bool]:
+    if not pages:
+        return [], False
+
+    chunks: list[tuple[str, list[int]]] = []
+    current_pieces: list[str] = []
+    current_pages: list[int] = []
+    current_chars = 0
+    truncated = False
+
+    for index, page in enumerate(pages):
+        page_text = normalize_whitespace(page)
+        if not page_text:
+            continue
+        header = f"[Page {index + 1}]\n"
+        block = header + page_text + "\n"
+
+        if len(block) > char_budget:
+            if current_pieces:
+                chunks.append(("".join(current_pieces).strip(), current_pages.copy()))
+                current_pieces = []
+                current_pages = []
+                current_chars = 0
+            remaining = char_budget - len(header) - 1
+            if remaining <= 0:
+                continue
+            chunks.append(((header + trim_text(page_text, remaining) + "\n").strip(), [index + 1]))
+            truncated = True
+            continue
+
+        if current_chars + len(block) > char_budget and current_pieces:
+            chunks.append(("".join(current_pieces).strip(), current_pages.copy()))
+            current_pieces = []
+            current_pages = []
+            current_chars = 0
+
+        current_pieces.append(block)
+        current_pages.append(index + 1)
+        current_chars += len(block)
+
+    if current_pieces:
+        chunks.append(("".join(current_pieces).strip(), current_pages.copy()))
+
+    return chunks, truncated
+
+
 def get_system_prompt(prompt_language: str) -> str:
     return SYSTEM_PROMPTS.get(prompt_language, SYSTEM_PROMPTS["en"])
 
@@ -541,16 +574,18 @@ def build_text_mode_prompt(
 - front_matter_year_candidate: {front_matter_meta.get("year", "")}
 
 请完成以下任务：
-1. 判断论文是否明确报告了与精神疾病或精神健康相关的预测、分类、筛查、识别、检测任务的定量评估指标。
+1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
 3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法只保留最合适的一项：cross_validation、independent_test_set、external_validation、not_reported。
+4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
 5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
+6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 只根据原文提取，不得补全缺失信息。
 - 若论文没有报告任何定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
 - 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+- 不要提取 p 值、效应量、量表前后测分数、均值差、可用性分数等非预测性能结果。
 - 以下文本可能是从整篇论文中筛选出的关键页面片段，而不是全文。
 
 论文文本：
@@ -570,16 +605,18 @@ Paper info:
 - front_matter_year_candidate: {front_matter_meta.get("year", "")}
 
 Please do the following:
-1. Decide whether the paper explicitly reports quantitative evaluation metrics for mental disorder or mental health prediction, classification, screening, recognition, or detection tasks.
+1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
 3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Keep only the single most appropriate evaluation method from: cross_validation, independent_test_set, external_validation, not_reported.
+4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
 5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
+6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - Extract strictly from the paper text. Do not fill in missing information.
 - If the paper does not report any quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
 - If a metric is mentioned but no concrete value is given, use "Not reported" in values.
+- Do not extract p-values, effect sizes, questionnaire score changes, mean differences, or usability scores as metrics.
 - The text below may be a selected evidence-focused subset rather than the full paper.
 
 Paper text:
@@ -609,17 +646,19 @@ def build_text_full_mode_prompt(
 - front_matter_year_candidate: {front_matter_meta.get("year", "")}
 
 请完成以下任务：
-1. 判断论文是否明确报告了与精神疾病或精神健康相关的预测、分类、筛查、识别、检测任务的定量评估指标。
+1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
 3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法只保留最合适的一项：cross_validation、independent_test_set、external_validation、not_reported。
+4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
 5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
+6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 以下文本按页顺序来自论文全文；若因长度限制被截断，也应优先基于已提供的全文顺序文本提取。
 - 只根据原文提取，不得补全缺失信息。
 - 若论文没有报告任何定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
 - 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+- 不要提取 p 值、效应量、量表前后测分数、均值差、可用性分数等非预测性能结果。
 
 论文文本：
 {context_text}
@@ -638,17 +677,95 @@ Paper info:
 - front_matter_year_candidate: {front_matter_meta.get("year", "")}
 
 Please do the following:
-1. Decide whether the paper explicitly reports quantitative evaluation metrics for mental disorder or mental health prediction, classification, screening, recognition, or detection tasks.
+1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
 3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Keep only the single most appropriate evaluation method from: cross_validation, independent_test_set, external_validation, not_reported.
+4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
 5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
+6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - The text below is the full paper text in page order, unless truncated due to length limits.
 - Extract strictly from the paper text. Do not fill in missing information.
 - If the paper does not report any quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
 - If a metric is mentioned but no concrete value is given, use "Not reported" in values.
+- Do not extract p-values, effect sizes, questionnaire score changes, mean differences, or usability scores as metrics.
+
+Paper text:
+{context_text}
+"""
+
+
+def build_text_full_chunk_prompt(
+    paper_id: str,
+    pdf_path: Path,
+    filename_meta: dict[str, str],
+    front_matter_meta: dict[str, str],
+    context_text: str,
+    chunk_index: int,
+    chunk_count: int,
+    prompt_language: str = "en",
+) -> str:
+    if prompt_language == "cn":
+        return f"""请从以下论文全文分块文本中提取结构化定量评估信息。
+
+论文信息：
+- paper_id: {paper_id}
+- pdf_path: {pdf_path}
+- filename_title_candidate: {filename_meta.get("title", "")}
+- filename_authors_candidate: {filename_meta.get("authors", "")}
+- filename_year_candidate: {filename_meta.get("year", "")}
+- front_matter_title_candidate: {front_matter_meta.get("title", "")}
+- front_matter_authors_candidate: {front_matter_meta.get("authors", "")}
+- front_matter_year_candidate: {front_matter_meta.get("year", "")}
+- chunk_index: {chunk_index}
+- chunk_count: {chunk_count}
+
+请完成以下任务：
+1. 这只是整篇论文按页顺序切分后的第 {chunk_index}/{chunk_count} 块。只提取本块中明确出现的定量评估结果，不要假设其他块中的内容。
+2. 判断本块是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
+3. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
+4. 只保留本块中主要结果、最优结果、最终结果，或作者明确强调的结果。
+5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+
+附加说明：
+- 若本块没有任何相关定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
+- 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+- 不要提取 p 值、效应量、量表前后测分数、均值差、可用性分数等非预测性能结果。
+- title、authors、year 可以使用本块中的明确证据；若本块未出现，可留空，后续会结合首页和文件名补全。
+
+论文文本：
+{context_text}
+"""
+
+    return f"""Extract structured quantitative evaluation information from the chunked full-paper text below.
+
+Paper info:
+- paper_id: {paper_id}
+- pdf_path: {pdf_path}
+- filename_title_candidate: {filename_meta.get("title", "")}
+- filename_authors_candidate: {filename_meta.get("authors", "")}
+- filename_year_candidate: {filename_meta.get("year", "")}
+- front_matter_title_candidate: {front_matter_meta.get("title", "")}
+- front_matter_authors_candidate: {front_matter_meta.get("authors", "")}
+- front_matter_year_candidate: {front_matter_meta.get("year", "")}
+- chunk_index: {chunk_index}
+- chunk_count: {chunk_count}
+
+Please do the following:
+1. This is chunk {chunk_index}/{chunk_count} from the full paper in page order. Extract only information explicitly present in this chunk. Do not assume content from other chunks.
+2. Decide whether this chunk explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
+3. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
+4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors within this chunk.
+5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the chunk does not provide enough information.
+6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+
+Important:
+- If this chunk contains no relevant quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
+- If a metric is mentioned but no concrete value is given, use "Not reported" in values.
+- Do not extract p-values, effect sizes, questionnaire score changes, mean differences, or usability scores as metrics.
+- title, authors, and year may be left empty if they are not explicitly visible in this chunk; they will be reconciled later with front-matter and filename candidates.
 
 Paper text:
 {context_text}
@@ -672,17 +789,19 @@ def build_pdf_direct_prompt(
 - filename_year_candidate: {filename_meta.get("year", "")}
 
 请完成以下任务：
-1. 判断论文是否明确报告了与精神疾病或精神健康相关的预测、分类、筛查、识别、检测任务的定量评估指标。
+1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
 3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法只保留最合适的一项：cross_validation、independent_test_set、external_validation、not_reported。
+4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
 5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
+6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 所附 PDF 是主信息源，文件名候选仅作辅助参考。
 - 只根据原文提取，不得补全缺失信息。
 - 若论文没有报告任何定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
 - 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+- 不要提取 p 值、效应量、量表前后测分数、均值差、可用性分数等非预测性能结果。
 """
 
     return f"""Extract structured quantitative evaluation information from the attached paper PDF.
@@ -695,17 +814,19 @@ Paper info:
 - filename_year_candidate: {filename_meta.get("year", "")}
 
 Please do the following:
-1. Decide whether the paper explicitly reports quantitative evaluation metrics for mental disorder or mental health prediction, classification, screening, recognition, or detection tasks.
+1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
 3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Keep only the single most appropriate evaluation method from: cross_validation, independent_test_set, external_validation, not_reported.
+4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
 5. Also return title, authors, and year, preferring explicit paper evidence over the filename candidates.
+6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - The attached PDF is the primary source. Filename candidates are only fallback hints.
 - Extract strictly from the paper. Do not fill in missing information.
 - If the paper does not report any quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
 - If a metric is mentioned but no concrete value is given, use "Not reported" in values.
+- Do not extract p-values, effect sizes, questionnaire score changes, mean differences, or usability scores as metrics.
 """
 
 
@@ -884,17 +1005,19 @@ def normalize_confidence(value: Any) -> float | None:
 def normalize_metric_category(category: Any, raw_name: Any = "") -> str:
     source = normalize_whitespace(str(category or raw_name or ""))
     lowered = source.lower()
+    if any(token in lowered for token in ["pr-auc", "pr auc", "average precision"]):
+        return f"Other:{normalize_whitespace(str(raw_name or category or 'PR-AUC'))}"
+    if any(token in lowered for token in ["dice", "iou", "intersection over union", "mae", "mean absolute error", "rmse", "root mean squared error"]):
+        return f"Other:{normalize_whitespace(str(raw_name or category or source or 'Other'))}"
     mapping = {
         "accuracy": "Accuracy",
+        "balanced accuracy": "Accuracy",
         "acc": "Accuracy",
         "auc": "AUC",
         "roc auc": "AUC",
         "auroc": "AUC",
-        "roc-auc": "ROC-AUC",
-        "roc auc score": "ROC-AUC",
-        "pr-auc": "PR-AUC",
-        "pr auc": "PR-AUC",
-        "average precision": "PR-AUC",
+        "roc-auc": "AUC",
+        "roc auc score": "AUC",
         "sensitivity": "Sensitivity",
         "recall": "Sensitivity",
         "specificity": "Specificity",
@@ -904,14 +1027,6 @@ def normalize_metric_category(category: Any, raw_name: Any = "") -> str:
         "f1": "F1",
         "f1 score": "F1",
         "f-1": "F1",
-        "dice": "Dice",
-        "dice score": "Dice",
-        "iou": "IoU",
-        "intersection over union": "IoU",
-        "mae": "MAE",
-        "mean absolute error": "MAE",
-        "rmse": "RMSE",
-        "root mean squared error": "RMSE",
     }
     if lowered in mapping:
         return mapping[lowered]
@@ -957,16 +1072,10 @@ def is_prediction_performance_metric(metric: dict[str, Any]) -> bool:
     if category in {
         "Accuracy",
         "AUC",
-        "ROC-AUC",
-        "PR-AUC",
         "Sensitivity",
         "Specificity",
         "Precision",
         "F1",
-        "Dice",
-        "IoU",
-        "MAE",
-        "RMSE",
     }:
         return True
 
@@ -979,6 +1088,7 @@ def is_prediction_performance_metric(metric: dict[str, Any]) -> bool:
     ).lower()
 
     non_predictive_patterns = [
+        r"\brecall task\b",
         r"\bp[\s-]?value\b",
         r"\beffect size\b",
         r"\bmann",
@@ -1003,6 +1113,15 @@ def is_prediction_performance_metric(metric: dict[str, Any]) -> bool:
         return False
 
     predictive_other_patterns = [
+        r"\bpr[- ]?auc\b",
+        r"\baverage precision\b",
+        r"\bdice\b",
+        r"\biou\b",
+        r"\bintersection over union\b",
+        r"\bmae\b",
+        r"\bmean absolute error\b",
+        r"\brmse\b",
+        r"\broot mean squared error\b",
         r"\bbalanced accuracy\b",
         r"\bmcc\b",
         r"\bconcordance index\b",
@@ -1045,6 +1164,113 @@ def normalize_metric_items(metrics: Any) -> list[dict[str, Any]]:
     return [metric for metric in normalized if is_prediction_performance_metric(metric)]
 
 
+HEURISTIC_METRIC_PATTERNS = {
+    "Accuracy": [r"\bbalanced accuracy\b", r"\baccuracy\b", r"\bacc\b"],
+    "AUC": [r"\broc[- ]?auc\b", r"\bauroc\b", r"\bauc\b"],
+    "Sensitivity": [r"\bsensitivity\b"],
+    "Specificity": [r"\bspecificity\b"],
+    "Precision": [r"\bprecision\b", r"\bpositive predictive value\b", r"\bppv\b"],
+    "F1": [r"\bf1(?:[- ]?score)?\b", r"\bf-1\b"],
+}
+NUMERIC_VALUE_PATTERN = re.compile(r"(?<![\w.])(?:\d{1,3}(?:\.\d+)?%?|\.\d+)(?![\w.])")
+
+
+def split_sentences(text: str) -> list[str]:
+    normalized = normalize_whitespace(text)
+    if not normalized:
+        return []
+    return [segment.strip() for segment in re.split(r"(?<=[.!?])\s+", normalized) if segment.strip()]
+
+
+def pick_numeric_value_near_match(sentence: str, alias_match: re.Match[str]) -> str | None:
+    after_window = sentence[alias_match.end() : min(len(sentence), alias_match.end() + 120)]
+    connector_patterns = [
+        "=",
+        ":",
+        " was ",
+        " were ",
+        " is ",
+        " are ",
+        " reached ",
+        " reach ",
+        " achieved ",
+        " achieve ",
+        " yielded ",
+        " obtained ",
+        " on the ",
+        " on ",
+        " for the ",
+        " for ",
+        " in the ",
+        " at ",
+        " to ",
+    ]
+    for match in NUMERIC_VALUE_PATTERN.finditer(after_window):
+        bridge = f" {after_window[: match.start()].lower()} "
+        if bridge.strip() and not any(token in bridge for token in connector_patterns):
+            continue
+        value = match.group(0)
+        if value.isdigit() and int(value) > 100:
+            continue
+        return value
+    return None
+
+
+def extract_context_labels(text: str) -> list[str]:
+    lowered = text.lower()
+    contexts: list[str] = []
+    if any(token in lowered for token in ["external validation", "external dataset", "external cohort", "external hospital"]):
+        contexts.append("external validation")
+    if any(token in lowered for token in ["test set", "held-out", "holdout", "train/test", "independent test"]):
+        contexts.append("test set")
+    if any(token in lowered for token in ["cross-validation", "cross validation", "k-fold", "k fold", "leave-one-out"]):
+        contexts.append("cross-validation")
+    if any(token in lowered for token in ["classification performance", "classification task", "classifier"]):
+        contexts.append("classification task")
+    if any(token in lowered for token in ["screening performance", "screening task"]):
+        contexts.append("screening task")
+    return contexts
+
+
+def heuristic_extract_metrics_from_pages(pages: list[str]) -> list[dict[str, Any]]:
+    aggregated: dict[str, dict[str, Any]] = {}
+    for page_number, page_text in enumerate(pages, start=1):
+        for sentence in split_sentences(page_text):
+            for category, patterns in HEURISTIC_METRIC_PATTERNS.items():
+                matched_value: str | None = None
+                for pattern in patterns:
+                    alias_match = re.search(pattern, sentence, re.IGNORECASE)
+                    if not alias_match:
+                        continue
+                    matched_value = pick_numeric_value_near_match(sentence, alias_match)
+                    if matched_value:
+                        break
+                if not matched_value:
+                    continue
+
+                item = aggregated.setdefault(
+                    category,
+                    {
+                        "category": category,
+                        "raw_name": category.lower(),
+                        "values": [],
+                        "contexts": [],
+                        "evidence_snippet": trim_text(sentence, 320),
+                        "page_numbers": [],
+                    },
+                )
+                if matched_value not in item["values"]:
+                    item["values"].append(matched_value)
+                for context in extract_context_labels(sentence):
+                    if context not in item["contexts"]:
+                        item["contexts"].append(context)
+                if page_number not in item["page_numbers"]:
+                    item["page_numbers"].append(page_number)
+                if not item["evidence_snippet"]:
+                    item["evidence_snippet"] = trim_text(sentence, 320)
+    return list(aggregated.values())
+
+
 def normalize_evaluation_methods(methods: Any) -> list[str]:
     raw_methods = normalize_string_list(methods)
     detected: list[str] = []
@@ -1062,10 +1288,8 @@ def normalize_evaluation_methods(methods: Any) -> list[str]:
     deduped = [item for item in dict.fromkeys(detected) if item in ALLOWED_METHODS and item != "not_reported"]
     if not deduped:
         return ["not_reported"]
-    for preferred in ["external_validation", "independent_test_set", "cross_validation"]:
-        if preferred in deduped:
-            return [preferred]
-    return [deduped[0]]
+    ordered = [item for item in ["cross_validation", "independent_test_set", "external_validation"] if item in deduped]
+    return ordered or deduped
 
 
 def infer_evaluation_methods_from_text(text: str) -> list[str]:
@@ -1081,6 +1305,43 @@ def infer_evaluation_methods_from_text(text: str) -> list[str]:
     if any(token in text for token in ["cross-validation", "cross validation", "k-fold", "k fold", "leave-one-out", "loo cross"]):
         candidates.append("cross_validation")
     return normalize_evaluation_methods(candidates)
+
+
+def infer_evaluation_method_with_source(text: str, metrics: list[dict[str, Any]] | None = None) -> tuple[list[str], str]:
+    explicit_methods = infer_evaluation_methods_from_text(text)
+    if explicit_methods != ["not_reported"]:
+        return explicit_methods, "explicit_text"
+
+    if not metrics:
+        return ["not_reported"], "not_reported"
+
+    lowered = normalize_whitespace(text).lower()
+    heuristic_independent_signals = [
+        "training data",
+        "train data",
+        "train set",
+        "test data",
+        "test set",
+        "evaluation set",
+        "evaluation data",
+        "experimental test",
+        "experimental tests",
+        "benchmark",
+        "dataset",
+        "datasets",
+        "fine-tuning stage",
+        "fine tuning stage",
+        "inference stage",
+        "classification model",
+        "classification performance",
+        "model structure",
+        "we train models",
+        "trained model",
+    ]
+    if any(signal in lowered for signal in heuristic_independent_signals):
+        return ["independent_test_set"], "heuristic_text"
+
+    return ["not_reported"], "not_reported"
 
 
 def normalize_evidence(evidence: Any, metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1102,6 +1363,79 @@ def normalize_evidence(evidence: Any, metrics: list[dict[str, Any]]) -> list[dic
         if snippet or pages:
             normalized.append({"snippet": snippet, "page_numbers": pages})
     return normalized
+
+
+def deduplicate_metrics(metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[Any, ...]] = set()
+    for metric in metrics:
+        key = (
+            normalize_whitespace(str(metric.get("category", ""))),
+            tuple(normalize_string_list(metric.get("values"))),
+            tuple(normalize_string_list(metric.get("contexts"))),
+            normalize_whitespace(str(metric.get("evidence_snippet", ""))),
+            tuple(normalize_page_numbers(metric.get("page_numbers"))),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(metric)
+    return deduped
+
+
+def deduplicate_evidence(evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[int, ...]]] = set()
+    for item in evidence:
+        snippet = normalize_whitespace(str(item.get("snippet", "")))
+        pages = tuple(normalize_page_numbers(item.get("page_numbers")))
+        key = (snippet, pages)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append({"snippet": snippet, "page_numbers": list(pages)})
+    return deduped
+
+
+def merge_chunk_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any]:
+    merged_metrics: list[dict[str, Any]] = []
+    merged_evidence: list[dict[str, Any]] = []
+    merged_methods: list[str] = []
+    title = ""
+    authors = ""
+    year = ""
+    confidences: list[float] = []
+
+    for payload in payloads:
+        if not title:
+            title = normalize_whitespace(str(payload.get("title", "")))
+        if not authors:
+            authors = normalize_authors(payload.get("authors"))
+        if not year:
+            year = normalize_year(payload.get("year"))
+        chunk_metrics = normalize_metric_items(payload.get("metrics"))
+        if chunk_metrics:
+            merged_metrics.extend(chunk_metrics)
+        merged_evidence.extend(normalize_evidence(payload.get("evidence"), chunk_metrics))
+        merged_methods.extend(normalize_string_list(payload.get("evaluation_methods")))
+        confidence = normalize_confidence(payload.get("confidence"))
+        if confidence is not None:
+            confidences.append(confidence)
+
+    merged_metrics = deduplicate_metrics(merged_metrics)
+    merged_evidence = deduplicate_evidence(merged_evidence)
+    merged_methods = normalize_evaluation_methods(merged_methods)
+
+    return {
+        "title": title,
+        "authors": authors,
+        "year": year,
+        "has_quantitative_metrics": bool(merged_metrics),
+        "metrics": merged_metrics,
+        "evaluation_methods": merged_methods,
+        "evidence": merged_evidence,
+        "confidence": max(confidences) if confidences else None,
+    }
 
 
 def pick_first_non_empty(*values: str) -> str:
@@ -1159,15 +1493,19 @@ def build_paper_record(
     sent_char_count: int,
     truncated: bool,
     method_hints: list[str] | None = None,
+    fallback_metrics: list[dict[str, Any]] | None = None,
+    method_source: str = "not_reported",
 ) -> dict[str, Any]:
     metrics = normalize_metric_items(llm_payload.get("metrics"))
-    has_quantitative_metrics = bool(llm_payload.get("has_quantitative_metrics")) and bool(metrics)
-    if not has_quantitative_metrics:
-        metrics = []
+    if not metrics and fallback_metrics:
+        metrics = normalize_metric_items(fallback_metrics)
+    has_quantitative_metrics = bool(metrics)
 
     methods = normalize_evaluation_methods(llm_payload.get("evaluation_methods"))
     if methods == ["not_reported"] and method_hints:
         methods = method_hints
+    if methods != ["not_reported"] and method_source == "not_reported":
+        method_source = "explicit_or_fallback"
 
     title = pick_first_non_empty(str(llm_payload.get("title", "")), filename_meta.get("title", ""), front_meta.get("title", ""), pdf_path.stem)
     authors = pick_first_non_empty(normalize_authors(llm_payload.get("authors")), filename_meta.get("authors", ""), front_meta.get("authors", ""), "Unknown")
@@ -1189,6 +1527,7 @@ def build_paper_record(
         has_quantitative_metrics=has_quantitative_metrics,
         metrics=metrics,
         evaluation_methods=methods,
+        evaluation_method_source=method_source,
         evidence=evidence,
         final_line=final_line,
         confidence=confidence,
@@ -1204,46 +1543,81 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
         front_meta = {"title": "", "authors": "", "year": ""}
         selected_pages: list[int] = []
         method_hints = ["not_reported"]
+        method_source = "not_reported"
+        fallback_metrics: list[dict[str, Any]] = []
         extracted_page_count = 0
         sent_char_count = 0
         truncated = False
+        full_text = ""
 
-        if extractor.config.input_mode in {"text", "text_full"}:
+        if extractor.config.input_mode in {"text", "text_full", "text_full_chunked"}:
             pages = read_pdf_pages(pdf_path)
             if not any(page.strip() for page in pages):
                 raise RuntimeError("No extractable text found in PDF.")
 
             extracted_page_count = len(pages)
+            full_text = " ".join(pages)
             front_meta = extract_front_matter_candidates(pages[:2])
-            method_hints = infer_evaluation_methods_from_text(" ".join(pages))
-            if extractor.config.input_mode == "text_full":
+            fallback_metrics = heuristic_extract_metrics_from_pages(pages)
+            method_hints, method_source = infer_evaluation_method_with_source(full_text, fallback_metrics)
+            if extractor.config.input_mode == "text_full_chunked":
+                context_chunks, truncated = build_full_context_chunks(pages, char_budget)
+                if not context_chunks:
+                    raise RuntimeError("No context chunks built from PDF text.")
+                llm_payloads: list[dict[str, Any]] = []
+                selected_pages = []
+                sent_char_count = 0
+                for chunk_index, (context_text, chunk_pages) in enumerate(context_chunks, start=1):
+                    selected_pages.extend(chunk_pages)
+                    sent_char_count += len(context_text)
+                    llm_payloads.append(
+                        extractor.extract(
+                            build_text_full_chunk_prompt(
+                                paper_id=paper_id,
+                                pdf_path=pdf_path,
+                                filename_meta=filename_meta,
+                                front_matter_meta=front_meta,
+                                context_text=context_text,
+                                chunk_index=chunk_index,
+                                chunk_count=len(context_chunks),
+                                prompt_language=extractor.config.prompt_language,
+                            )
+                        )
+                    )
+                llm_payload = merge_chunk_payloads(llm_payloads)
+                selected_pages = sorted(dict.fromkeys(selected_pages))
+            elif extractor.config.input_mode == "text_full":
                 context_text, selected_pages = build_full_context(pages, char_budget)
+                if not context_text:
+                    raise RuntimeError("No context selected from PDF text.")
+                sent_char_count = len(context_text)
+                truncated = sent_char_count >= char_budget or len(selected_pages) < extracted_page_count
+                llm_payload = extractor.extract(
+                    build_text_full_mode_prompt(
+                        paper_id=paper_id,
+                        pdf_path=pdf_path,
+                        filename_meta=filename_meta,
+                        front_matter_meta=front_meta,
+                        context_text=context_text,
+                        prompt_language=extractor.config.prompt_language,
+                    )
+                )
             else:
                 context_text, selected_pages = select_context_pages(pages, char_budget)
-            if not context_text:
-                raise RuntimeError("No context selected from PDF text.")
-            sent_char_count = len(context_text)
-            truncated = sent_char_count >= char_budget or len(selected_pages) < extracted_page_count
-
-            if extractor.config.input_mode == "text_full":
-                user_prompt = build_text_full_mode_prompt(
-                    paper_id=paper_id,
-                    pdf_path=pdf_path,
-                    filename_meta=filename_meta,
-                    front_matter_meta=front_meta,
-                    context_text=context_text,
-                    prompt_language=extractor.config.prompt_language,
+                if not context_text:
+                    raise RuntimeError("No context selected from PDF text.")
+                sent_char_count = len(context_text)
+                truncated = sent_char_count >= char_budget or len(selected_pages) < extracted_page_count
+                llm_payload = extractor.extract(
+                    build_text_mode_prompt(
+                        paper_id=paper_id,
+                        pdf_path=pdf_path,
+                        filename_meta=filename_meta,
+                        front_matter_meta=front_meta,
+                        context_text=context_text,
+                        prompt_language=extractor.config.prompt_language,
+                    )
                 )
-            else:
-                user_prompt = build_text_mode_prompt(
-                    paper_id=paper_id,
-                    pdf_path=pdf_path,
-                    filename_meta=filename_meta,
-                    front_matter_meta=front_meta,
-                    context_text=context_text,
-                    prompt_language=extractor.config.prompt_language,
-                )
-            llm_payload = extractor.extract(user_prompt)
         else:
             llm_payload = extractor.extract(
                 build_pdf_direct_prompt(
@@ -1254,6 +1628,10 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
                 ),
                 pdf_path=pdf_path,
             )
+        if full_text:
+            llm_metrics_present = bool(normalize_metric_items(llm_payload.get("metrics")))
+            if llm_metrics_present:
+                method_hints, method_source = infer_evaluation_method_with_source(full_text, [{"category": "metric"}])
         record = build_paper_record(
             paper_id=paper_id,
             pdf_path=pdf_path,
@@ -1265,6 +1643,8 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
             sent_char_count=sent_char_count,
             truncated=truncated,
             method_hints=method_hints,
+            fallback_metrics=fallback_metrics,
+            method_source=method_source,
         )
         record["input_mode"] = extractor.config.input_mode
         record["context_page_numbers"] = selected_pages
@@ -1332,6 +1712,20 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 def flatten_record_for_csv(record: dict[str, Any]) -> dict[str, Any]:
     metrics = record.get("metrics", [])
     methods = record.get("evaluation_methods", [])
+    evidence = record.get("evidence", [])
+    evidence_snippets = " || ".join(
+        normalize_whitespace(str(item.get("snippet", "")))
+        for item in evidence
+        if normalize_whitespace(str(item.get("snippet", "")))
+    )
+    evidence_page_numbers = sorted(
+        {
+            page
+            for item in evidence
+            for page in normalize_page_numbers(item.get("page_numbers"))
+        }
+    )
+    context_page_numbers = normalize_page_numbers(record.get("context_page_numbers"))
     return {
         "folder_id": record.get("paper_id", ""),
         "result_line": record.get("final_line", ""),
@@ -1348,6 +1742,10 @@ def flatten_record_for_csv(record: dict[str, Any]) -> dict[str, Any]:
         "metric_categories": ", ".join(dict.fromkeys(metric.get("category", "") for metric in metrics if metric.get("category"))),
         "metric_values": render_metric_values(metrics),
         "evaluation_methods": ", ".join(METHOD_LABELS.get(method, method) for method in methods),
+        "evaluation_method_source": record.get("evaluation_method_source", ""),
+        "evidence_snippets": evidence_snippets,
+        "evidence_page_numbers": ", ".join(str(page) for page in evidence_page_numbers),
+        "context_page_numbers": ", ".join(str(page) for page in context_page_numbers),
         "confidence": record.get("confidence", ""),
     }
 
@@ -1376,6 +1774,10 @@ def materialize_outputs(records_path: Path, summary_csv_path: Path, lines_txt_pa
                 "metric_categories",
                 "metric_values",
                 "evaluation_methods",
+                "evaluation_method_source",
+                "evidence_snippets",
+                "evidence_page_numbers",
+                "context_page_numbers",
                 "confidence",
             ],
         )

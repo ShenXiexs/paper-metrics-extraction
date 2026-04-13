@@ -74,15 +74,37 @@ class ExtractMetricsBatchTests(unittest.TestCase):
         self.assertIn("[Page 3]", context)
         self.assertEqual(page_numbers, [1, 2, 3])
 
+    def test_build_full_context_chunks_covers_all_pages(self) -> None:
+        pages = [
+            "A" * 20,
+            "B" * 20,
+            "C" * 20,
+        ]
+        chunks, truncated = MODULE.build_full_context_chunks(pages, char_budget=40)
+        self.assertFalse(truncated)
+        self.assertEqual([chunk_pages for _, chunk_pages in chunks], [[1], [2], [3]])
+        self.assertEqual(len(chunks), 3)
+
     def test_infer_evaluation_methods_from_text(self) -> None:
         text = "We used 10-fold cross-validation on the training data and evaluated on a held-out test set."
-        self.assertEqual(MODULE.infer_evaluation_methods_from_text(text), ["independent_test_set"])
+        self.assertEqual(
+            MODULE.infer_evaluation_methods_from_text(text),
+            ["cross_validation", "independent_test_set"],
+        )
+
+    def test_infer_evaluation_method_with_source_heuristic(self) -> None:
+        methods, source = MODULE.infer_evaluation_method_with_source(
+            "Our training data is based on two public datasets. The classification model is evaluated in the inference stage.",
+            [{"category": "Accuracy"}],
+        )
+        self.assertEqual(methods, ["independent_test_set"])
+        self.assertEqual(source, "heuristic_text")
 
     def test_normalize_metric_category(self) -> None:
         self.assertEqual(MODULE.normalize_metric_category("roc auc"), "AUC")
         self.assertEqual(MODULE.normalize_metric_category("recall"), "Sensitivity")
-        self.assertEqual(MODULE.normalize_metric_category("PR-AUC"), "PR-AUC")
-        self.assertEqual(MODULE.normalize_metric_category("Dice score"), "Dice")
+        self.assertEqual(MODULE.normalize_metric_category("PR-AUC"), "Other:PR-AUC")
+        self.assertEqual(MODULE.normalize_metric_category("Dice score"), "Other:Dice score")
         self.assertEqual(
             MODULE.normalize_metric_category("Matthews correlation coefficient", "Matthews correlation coefficient"),
             "Other:Matthews correlation coefficient",
@@ -119,6 +141,26 @@ class ExtractMetricsBatchTests(unittest.TestCase):
         self.assertEqual(len(metrics), 1)
         self.assertEqual(metrics[0]["category"], "Accuracy")
 
+    def test_heuristic_extract_metrics_from_pages(self) -> None:
+        metrics = MODULE.heuristic_extract_metrics_from_pages(
+            [
+                "The classification performance of the multi-task learning model is equal to that of the single-task single model, where accuracy and F1 Score of cognitive distortion task reached 93%, and other tasks reached more than 95%.",
+            ]
+        )
+        categories = {metric["category"] for metric in metrics}
+        self.assertEqual(categories, {"Accuracy", "F1"})
+        for metric in metrics:
+            self.assertEqual(metric["values"], ["93%"])
+            self.assertEqual(metric["page_numbers"], [1])
+
+    def test_heuristic_extract_metrics_ignores_precision_medicine(self) -> None:
+        metrics = MODULE.heuristic_extract_metrics_from_pages(
+            [
+                "This approach aligns with the recent field of precision medicine (Gameiro et al., 2018; Ginsburg and Phillips, 2018).",
+            ]
+        )
+        self.assertEqual(metrics, [])
+
     def test_build_pdf_direct_input(self) -> None:
         payload = MODULE.build_pdf_direct_input("file-123", "Extract metrics.")
         self.assertEqual(payload[0]["role"], "user")
@@ -129,7 +171,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
         methods = MODULE.normalize_evaluation_methods(
             ["10-fold cross-validation", "held-out test set", "external dataset validation"]
         )
-        self.assertEqual(methods, ["external_validation"])
+        self.assertEqual(methods, ["cross_validation", "independent_test_set", "external_validation"])
 
     def test_build_text_mode_prompt_cn(self) -> None:
         prompt = MODULE.build_text_mode_prompt(
@@ -146,7 +188,57 @@ class ExtractMetricsBatchTests(unittest.TestCase):
     def test_get_system_prompt_en(self) -> None:
         prompt = MODULE.get_system_prompt("en")
         self.assertIn("Core extraction rules", prompt)
-        self.assertIn("PR-AUC", prompt)
+        self.assertIn("A paper may contain multiple metric items and multiple categories", prompt)
+
+    def test_merge_chunk_payloads_combines_metrics(self) -> None:
+        merged = MODULE.merge_chunk_payloads(
+            [
+                {
+                    "title": "Paper",
+                    "authors": "Ali",
+                    "year": "2024",
+                    "has_quantitative_metrics": True,
+                    "metrics": [
+                        {
+                            "category": "Accuracy",
+                            "raw_name": "accuracy",
+                            "values": ["0.84"],
+                            "contexts": ["test set"],
+                            "evidence_snippet": "Accuracy was 0.84.",
+                            "page_numbers": [5],
+                        }
+                    ],
+                    "evaluation_methods": ["independent_test_set"],
+                    "evidence": [{"snippet": "Accuracy was 0.84.", "page_numbers": [5]}],
+                    "confidence": 0.8,
+                },
+                {
+                    "title": "",
+                    "authors": "",
+                    "year": "",
+                    "has_quantitative_metrics": True,
+                    "metrics": [
+                        {
+                            "category": "F1",
+                            "raw_name": "f1",
+                            "values": ["0.81"],
+                            "contexts": ["test set"],
+                            "evidence_snippet": "F1 was 0.81.",
+                            "page_numbers": [5],
+                        }
+                    ],
+                    "evaluation_methods": ["cross_validation"],
+                    "evidence": [{"snippet": "F1 was 0.81.", "page_numbers": [5]}],
+                    "confidence": 0.9,
+                },
+            ]
+        )
+        self.assertEqual(merged["title"], "Paper")
+        self.assertEqual(merged["authors"], "Ali")
+        self.assertEqual(merged["year"], "2024")
+        self.assertEqual({metric["category"] for metric in merged["metrics"]}, {"Accuracy", "F1"})
+        self.assertEqual(merged["evaluation_methods"], ["cross_validation", "independent_test_set"])
+        self.assertEqual(merged["confidence"], 0.9)
 
     def test_render_final_line_without_metrics(self) -> None:
         line = MODULE.render_final_line(
@@ -179,6 +271,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             method_hints=["independent_test_set"],
         )
         self.assertEqual(record["evaluation_methods"], ["independent_test_set"])
+        self.assertEqual(record["evaluation_method_source"], "explicit_or_fallback")
         self.assertIn("独立测试集", record["final_line"])
         self.assertEqual(record["extracted_page_count"], 12)
         self.assertEqual(record["sent_page_count"], 8)
@@ -255,10 +348,12 @@ class ExtractMetricsBatchTests(unittest.TestCase):
                     }
                 ],
                 "evaluation_methods": ["independent_test_set"],
+                "evaluation_method_source": "explicit_text",
                 "evidence": [{"snippet": "Accuracy was 0.84.", "page_numbers": [5]}],
                 "final_line": "[Ali_2020] | 指标: [Accuracy] | 数值: [Accuracy=0.84 (held-out test set)] | 方法: [独立测试集]",
                 "confidence": 0.9,
                 "error": None,
+                "context_page_numbers": [1, 2, 5, 6],
             }
             records_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
             MODULE.materialize_outputs(records_path, summary_path, lines_path)
@@ -266,6 +361,13 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             self.assertIn("Test Paper", summary_text)
             self.assertTrue(summary_text.splitlines()[0].startswith("folder_id,result_line,"))
             self.assertTrue(summary_text.splitlines()[1].startswith("1,"))
+            self.assertIn("evaluation_method_source", summary_text.splitlines()[0])
+            self.assertIn("evidence_snippets", summary_text.splitlines()[0])
+            self.assertIn("evidence_page_numbers", summary_text.splitlines()[0])
+            self.assertIn("context_page_numbers", summary_text.splitlines()[0])
+            self.assertIn("Accuracy was 0.84.", summary_text)
+            self.assertIn(",5,", summary_text)
+            self.assertIn("1, 2, 5, 6", summary_text)
             self.assertIn("42000", summary_text)
             self.assertIn("[Ali_2020]", lines_path.read_text(encoding="utf-8"))
 
