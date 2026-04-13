@@ -32,10 +32,16 @@ LOGGER = logging.getLogger("extract_metrics_batch")
 ALLOWED_METRIC_CATEGORIES = [
     "Accuracy",
     "AUC",
+    "ROC-AUC",
+    "PR-AUC",
     "Sensitivity",
     "Specificity",
     "Precision",
     "F1",
+    "Dice",
+    "IoU",
+    "MAE",
+    "RMSE",
 ]
 ALLOWED_METHODS = [
     "cross_validation",
@@ -52,49 +58,69 @@ METHOD_LABELS = {
 KEYWORD_PATTERNS = {
     r"\baccuracy\b": 3,
     r"\bauc\b": 3,
+    r"\broc[- ]?auc\b": 3,
+    r"\bpr[- ]?auc\b": 3,
     r"\broc\b": 2,
     r"\bsensitivity\b": 3,
     r"\bspecificity\b": 3,
     r"\bprecision\b": 3,
     r"\bf1\b": 3,
+    r"\bdice\b": 3,
+    r"\biou\b": 3,
+    r"\bmae\b": 3,
+    r"\brmse\b": 3,
     r"\brecall\b": 2,
     r"\bperformance\b": 1,
     r"\bclassifier\b": 1,
     r"\bpredict(?:ion|ive|or)?\b": 2,
     r"\bscreen(?:ing)?\b": 2,
+    r"\bresults?\b": 1,
+    r"\bexperiments?\b": 1,
+    r"\btable\b": 1,
+    r"\bfigure\b": 1,
     r"\btest set\b": 2,
     r"\btrain/test\b": 2,
+    r"\btrain/validation/test\b": 2,
     r"\bhold[- ]?out\b": 2,
     r"\bcross[- ]?validation\b": 2,
     r"\bk[- ]?fold\b": 2,
     r"\bexternal validation\b": 3,
     r"\bvalidation\b": 1,
 }
-SYSTEM_PROMPT = """You are an expert research extraction assistant.
+SYSTEM_PROMPTS = {
+    "en": """Role: You are a rigorous academic information extraction assistant specializing in quantitative results extraction from research papers.
 
-Your job is to extract only explicitly reported quantitative predictive performance results for mental disorder / mental health prediction, recognition, classification, detection, or screening tasks.
+Task: Extract structured quantitative evaluation information from the given paper. All information must be strictly based on the original text. Do NOT infer, guess, or fabricate any information.
 
-Return a single JSON object only. Do not wrap it in Markdown. Do not add commentary.
+Core extraction rules:
+1. Focus on quantitative evaluation results reported in Results / Experiments / Tables / Figures. Ignore background or methodology descriptions that only define metrics.
+2. Extract only main results, best performance, final reported results, or the result explicitly emphasized by the authors.
+3. If multiple models are reported, keep only the best-performing or most emphasized result set.
+4. Ensure strict one-to-one mapping between each metric and each reported value.
+5. If a metric is mentioned but no concrete value is reported, set its value to "Not reported".
+6. If the paper does not report any quantitative metrics relevant to prediction, classification, screening, recognition, or detection, set has_quantitative_metrics to false and return an empty metrics array.
+7. Return a single JSON object only. Do not use Markdown. Do not add commentary.
 
-Hard rules:
-1. Only extract metrics that are explicitly reported in the paper text.
-2. Do not infer missing numbers from qualitative claims such as "improved", "effective", or "promising".
-3. If the paper reports multiple models, datasets, or splits, keep all of them. Do not average and do not keep only the best one.
-4. Normalize metric categories to one of:
-   - Accuracy
-   - AUC
-   - Sensitivity
-   - Specificity
-   - Precision
-   - F1
-   - Other:<raw_name>
-5. Normalize evaluation methods to any subset of:
-   - cross_validation
-   - independent_test_set
-   - external_validation
-   - not_reported
-6. If the paper does not report any quantitative metric relevant to prediction / classification / screening performance, set has_quantitative_metrics to false and return an empty metrics array.
-7. Keep short evidence snippets and page numbers when possible.
+Normalize metric categories to one of:
+- Accuracy
+- AUC
+- ROC-AUC
+- PR-AUC
+- Sensitivity
+- Specificity
+- Precision
+- F1
+- Dice
+- IoU
+- MAE
+- RMSE
+- Other:<raw_name>
+
+Normalize evaluation method to the most appropriate one from:
+- cross_validation
+- independent_test_set
+- external_validation
+- not_reported
 
 Expected JSON schema:
 {
@@ -106,22 +132,83 @@ Expected JSON schema:
     {
       "category": "Accuracy",
       "raw_name": "accuracy",
-      "values": ["0.84", "84.0%"],
-      "contexts": ["SVM on held-out test set"],
-      "evidence_snippet": "Accuracy reached 84.0% on the held-out test set.",
+      "values": ["0.84"],
+      "contexts": ["main result"],
+      "evidence_snippet": "The model achieved 84.0% accuracy on the test set.",
       "page_numbers": [7]
     }
   ],
-  "evaluation_methods": ["cross_validation", "independent_test_set"],
+  "evaluation_methods": ["independent_test_set"],
   "evidence": [
     {
-      "snippet": "Accuracy reached 84.0% on the held-out test set.",
+      "snippet": "The model achieved 84.0% accuracy on the test set.",
       "page_numbers": [7]
     }
   ],
   "confidence": 0.86
 }
-"""
+""",
+    "cn": """角色：你是一名严谨的学术信息抽取助手，专门负责从论文中提取定量评估结果。
+
+任务：从输入论文中结构化提取定量评估信息。所有信息都必须严格基于论文原文，不得推测、猜测或编造。
+
+核心提取规则：
+1. 重点从 Results / Experiments / Tables / Figures 中提取定量结果；忽略背景和方法部分里仅用于说明概念的指标描述。
+2. 只提取主要结果、最优结果、最终结果，或作者明确强调的结果。
+3. 若有多个模型，只保留论文中表现最优或作者最强调的一组结果。
+4. 必须保证“指标-数值”严格一一对应。
+5. 若提到了某个指标但没有给出具体数值，则该指标的数值写为“未报告数值”。
+6. 若论文没有报告与预测、分类、筛查、识别、检测相关的定量指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
+7. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
+
+指标类别标准化为以下之一：
+- Accuracy
+- AUC
+- ROC-AUC
+- PR-AUC
+- Sensitivity
+- Specificity
+- Precision
+- F1
+- Dice
+- IoU
+- MAE
+- RMSE
+- Other:<raw_name>
+
+评估方法标准化为以下最合适的一项：
+- cross_validation
+- independent_test_set
+- external_validation
+- not_reported
+
+返回 JSON 结构：
+{
+  "title": "string",
+  "authors": "string 或 string 数组",
+  "year": "string 或 integer",
+  "has_quantitative_metrics": true,
+  "metrics": [
+    {
+      "category": "Accuracy",
+      "raw_name": "accuracy",
+      "values": ["0.84"],
+      "contexts": ["main result"],
+      "evidence_snippet": "The model achieved 84.0% accuracy on the test set.",
+      "page_numbers": [7]
+    }
+  ],
+  "evaluation_methods": ["independent_test_set"],
+  "evidence": [
+    {
+      "snippet": "The model achieved 84.0% accuracy on the test set.",
+      "page_numbers": [7]
+    }
+  ],
+  "confidence": 0.86
+}
+""",
+}
 
 
 @dataclass(frozen=True)
@@ -131,6 +218,7 @@ class ProviderConfig:
     api_key_env: str
     model: str
     input_mode: str = "text"
+    prompt_language: str = "en"
     temperature: float = 0.0
     timeout: float = 180.0
     max_retries: int = 3
@@ -179,6 +267,12 @@ def parse_args() -> argparse.Namespace:
         choices=["text", "pdf_direct"],
         default="text",
         help="Use local PDF-to-text extraction or upload the PDF directly to the API.",
+    )
+    parser.add_argument(
+        "--prompt-language",
+        choices=["en", "cn"],
+        default="en",
+        help="Prompt language used for the extraction instructions.",
     )
     parser.add_argument("--resume", action="store_true", help="Skip paper_ids already present in records.jsonl.")
     parser.add_argument("--limit", type=int, default=None, help="Process at most N papers after filtering.")
@@ -388,14 +482,48 @@ def select_context_pages(pages: list[str], char_budget: int) -> tuple[str, list[
     return "\n".join(pieces).strip(), kept_pages
 
 
+def get_system_prompt(prompt_language: str) -> str:
+    return SYSTEM_PROMPTS.get(prompt_language, SYSTEM_PROMPTS["en"])
+
+
 def build_text_mode_prompt(
     paper_id: str,
     pdf_path: Path,
     filename_meta: dict[str, str],
     front_matter_meta: dict[str, str],
     context_text: str,
+    prompt_language: str = "en",
 ) -> str:
-    return f"""Extract structured information from the paper below.
+    if prompt_language == "cn":
+        return f"""请从以下论文文本中提取结构化定量评估信息。
+
+论文信息：
+- paper_id: {paper_id}
+- pdf_path: {pdf_path}
+- filename_title_candidate: {filename_meta.get("title", "")}
+- filename_authors_candidate: {filename_meta.get("authors", "")}
+- filename_year_candidate: {filename_meta.get("year", "")}
+- front_matter_title_candidate: {front_matter_meta.get("title", "")}
+- front_matter_authors_candidate: {front_matter_meta.get("authors", "")}
+- front_matter_year_candidate: {front_matter_meta.get("year", "")}
+
+请完成以下任务：
+1. 判断论文是否明确报告了与精神疾病或精神健康相关的预测、分类、筛查、识别、检测任务的定量评估指标。
+2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
+3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+4. 评估方法只保留最合适的一项：cross_validation、independent_test_set、external_validation、not_reported。
+5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
+
+附加说明：
+- 只根据原文提取，不得补全缺失信息。
+- 若论文没有报告任何定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
+- 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+
+论文文本：
+{context_text}
+"""
+
+    return f"""Extract structured quantitative evaluation information from the paper text below.
 
 Paper info:
 - paper_id: {paper_id}
@@ -407,16 +535,17 @@ Paper info:
 - front_matter_authors_candidate: {front_matter_meta.get("authors", "")}
 - front_matter_year_candidate: {front_matter_meta.get("year", "")}
 
-Extraction target:
-1. Decide whether the paper explicitly reports quantitative predictive / classification / screening performance metrics for mental disorder or mental health related prediction tasks.
-2. If yes, extract every reported metric and its concrete values.
-3. Extract evaluation method labels from only: cross_validation, independent_test_set, external_validation. If not clear, use not_reported.
-4. Also return title, authors, and year. Prefer explicit paper evidence over filename guesses.
+Please do the following:
+1. Decide whether the paper explicitly reports quantitative evaluation metrics for mental disorder or mental health prediction, classification, screening, recognition, or detection tasks.
+2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
+3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+4. Keep only the single most appropriate evaluation method from: cross_validation, independent_test_set, external_validation, not_reported.
+5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
 
 Important:
-- The paper may be about interventions or chatbots and may contain no predictive metrics. In that case set has_quantitative_metrics to false.
-- Keep values exactly as reported when possible.
-- Keep evidence snippets short.
+- Extract strictly from the paper text. Do not fill in missing information.
+- If the paper does not report any quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
+- If a metric is mentioned but no concrete value is given, use "Not reported" in values.
 
 Paper text:
 {context_text}
@@ -427,8 +556,33 @@ def build_pdf_direct_prompt(
     paper_id: str,
     pdf_path: Path,
     filename_meta: dict[str, str],
+    prompt_language: str = "en",
 ) -> str:
-    return f"""Extract structured information from the attached paper PDF.
+    if prompt_language == "cn":
+        return f"""请从所附论文 PDF 中提取结构化定量评估信息。
+
+论文信息：
+- paper_id: {paper_id}
+- pdf_path: {pdf_path}
+- filename_title_candidate: {filename_meta.get("title", "")}
+- filename_authors_candidate: {filename_meta.get("authors", "")}
+- filename_year_candidate: {filename_meta.get("year", "")}
+
+请完成以下任务：
+1. 判断论文是否明确报告了与精神疾病或精神健康相关的预测、分类、筛查、识别、检测任务的定量评估指标。
+2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
+3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+4. 评估方法只保留最合适的一项：cross_validation、independent_test_set、external_validation、not_reported。
+5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
+
+附加说明：
+- 所附 PDF 是主信息源，文件名候选仅作辅助参考。
+- 只根据原文提取，不得补全缺失信息。
+- 若论文没有报告任何定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
+- 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+"""
+
+    return f"""Extract structured quantitative evaluation information from the attached paper PDF.
 
 Paper info:
 - paper_id: {paper_id}
@@ -437,17 +591,18 @@ Paper info:
 - filename_authors_candidate: {filename_meta.get("authors", "")}
 - filename_year_candidate: {filename_meta.get("year", "")}
 
-Extraction target:
-1. Decide whether the paper explicitly reports quantitative predictive / classification / screening performance metrics for mental disorder or mental health related prediction tasks.
-2. If yes, extract every reported metric and its concrete values.
-3. Extract evaluation method labels from only: cross_validation, independent_test_set, external_validation. If not clear, use not_reported.
-4. Also return title, authors, and year. Prefer explicit paper evidence over filename guesses.
+Please do the following:
+1. Decide whether the paper explicitly reports quantitative evaluation metrics for mental disorder or mental health prediction, classification, screening, recognition, or detection tasks.
+2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
+3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+4. Keep only the single most appropriate evaluation method from: cross_validation, independent_test_set, external_validation, not_reported.
+5. Also return title, authors, and year, preferring explicit paper evidence over the filename candidates.
 
 Important:
-- The attached PDF is the primary source. Use filename candidates only as fallback metadata hints.
-- The paper may be about interventions or chatbots and may contain no predictive metrics. In that case set has_quantitative_metrics to false.
-- Keep values exactly as reported when possible.
-- Keep evidence snippets short.
+- The attached PDF is the primary source. Filename candidates are only fallback hints.
+- Extract strictly from the paper. Do not fill in missing information.
+- If the paper does not report any quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
+- If a metric is mentioned but no concrete value is given, use "Not reported" in values.
 """
 
 
@@ -537,7 +692,7 @@ class LLMExtractor:
         common_kwargs = {
             "model": self.config.model,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": get_system_prompt(self.config.prompt_language)},
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": self.config.temperature,
@@ -562,7 +717,7 @@ class LLMExtractor:
             uploaded_file_id = uploaded.id
             response = client.responses.create(
                 model=self.config.model,
-                instructions=SYSTEM_PROMPT,
+                instructions=get_system_prompt(self.config.prompt_language),
                 input=build_pdf_direct_input(uploaded_file_id, user_prompt),
                 temperature=self.config.temperature,
             )
@@ -632,6 +787,11 @@ def normalize_metric_category(category: Any, raw_name: Any = "") -> str:
         "auc": "AUC",
         "roc auc": "AUC",
         "auroc": "AUC",
+        "roc-auc": "ROC-AUC",
+        "roc auc score": "ROC-AUC",
+        "pr-auc": "PR-AUC",
+        "pr auc": "PR-AUC",
+        "average precision": "PR-AUC",
         "sensitivity": "Sensitivity",
         "recall": "Sensitivity",
         "specificity": "Specificity",
@@ -641,6 +801,14 @@ def normalize_metric_category(category: Any, raw_name: Any = "") -> str:
         "f1": "F1",
         "f1 score": "F1",
         "f-1": "F1",
+        "dice": "Dice",
+        "dice score": "Dice",
+        "iou": "IoU",
+        "intersection over union": "IoU",
+        "mae": "MAE",
+        "mean absolute error": "MAE",
+        "rmse": "RMSE",
+        "root mean squared error": "RMSE",
     }
     if lowered in mapping:
         return mapping[lowered]
@@ -726,7 +894,12 @@ def normalize_evaluation_methods(methods: Any) -> list[str]:
             detected.append(lowered)
 
     deduped = [item for item in dict.fromkeys(detected) if item in ALLOWED_METHODS and item != "not_reported"]
-    return deduped or ["not_reported"]
+    if not deduped:
+        return ["not_reported"]
+    for preferred in ["external_validation", "independent_test_set", "cross_validation"]:
+        if preferred in deduped:
+            return [preferred]
+    return [deduped[0]]
 
 
 def normalize_evidence(evidence: Any, metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -858,6 +1031,7 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
                     filename_meta=filename_meta,
                     front_matter_meta=front_meta,
                     context_text=context_text,
+                    prompt_language=extractor.config.prompt_language,
                 )
             )
         else:
@@ -866,6 +1040,7 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
                     paper_id=paper_id,
                     pdf_path=pdf_path,
                     filename_meta=filename_meta,
+                    prompt_language=extractor.config.prompt_language,
                 ),
                 pdf_path=pdf_path,
             )
@@ -992,6 +1167,7 @@ def persist_run_config(output_dir: Path, config: ProviderConfig, args: argparse.
         "paper_ids": parse_requested_paper_ids(args.paper_id),
         "char_budget": args.char_budget,
         "input_mode": args.input_mode,
+        "prompt_language": args.prompt_language,
         "keep_uploaded_files": args.keep_uploaded_files,
         "resume": args.resume,
         "scheduled_count": scheduled_count,
@@ -1033,11 +1209,12 @@ def main() -> int:
         api_key_env=args.api_key_env,
         model=args.model,
         input_mode=args.input_mode,
+        prompt_language=args.prompt_language,
         max_retries=max(1, args.max_retries),
         concurrency=max(1, args.concurrency),
         keep_uploaded_files=args.keep_uploaded_files,
     )
-    if args.input_mode == "pdf_direct" and args.provider.lower() != "openai":
+    if args.input_mode == "pdf_direct" and "api.openai.com" not in args.base_url:
         LOGGER.warning(
             "input_mode=pdf_direct depends on Files + Responses API compatibility and is only validated against official OpenAI."
         )

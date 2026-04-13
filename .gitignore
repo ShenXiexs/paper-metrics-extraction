@@ -17,6 +17,12 @@ env/
 # Environment and secrets
 .env
 .env.*
+.envrc
+.direnv/
+secrets/
+*.pem
+*.key
+*.secret
 
 # Local paper corpus and extraction outputs
 Paper/

@@ -64,6 +64,8 @@ class ExtractMetricsBatchTests(unittest.TestCase):
     def test_normalize_metric_category(self) -> None:
         self.assertEqual(MODULE.normalize_metric_category("roc auc"), "AUC")
         self.assertEqual(MODULE.normalize_metric_category("recall"), "Sensitivity")
+        self.assertEqual(MODULE.normalize_metric_category("PR-AUC"), "PR-AUC")
+        self.assertEqual(MODULE.normalize_metric_category("Dice score"), "Dice")
         self.assertEqual(
             MODULE.normalize_metric_category("Matthews correlation coefficient", "Matthews correlation coefficient"),
             "Other:Matthews correlation coefficient",
@@ -79,10 +81,24 @@ class ExtractMetricsBatchTests(unittest.TestCase):
         methods = MODULE.normalize_evaluation_methods(
             ["10-fold cross-validation", "held-out test set", "external dataset validation"]
         )
-        self.assertEqual(
-            methods,
-            ["cross_validation", "independent_test_set", "external_validation"],
+        self.assertEqual(methods, ["external_validation"])
+
+    def test_build_text_mode_prompt_cn(self) -> None:
+        prompt = MODULE.build_text_mode_prompt(
+            paper_id="1",
+            pdf_path=Path("Paper/1/test.pdf"),
+            filename_meta={"title": "标题", "authors": "作者", "year": "2024"},
+            front_matter_meta={"title": "前页标题", "authors": "前页作者", "year": "2024"},
+            context_text="结果部分显示 Accuracy 0.84。",
+            prompt_language="cn",
         )
+        self.assertIn("请从以下论文文本中提取结构化定量评估信息", prompt)
+        self.assertIn("只保留主要结果、最优结果、最终结果", prompt)
+
+    def test_get_system_prompt_en(self) -> None:
+        prompt = MODULE.get_system_prompt("en")
+        self.assertIn("Core extraction rules", prompt)
+        self.assertIn("PR-AUC", prompt)
 
     def test_render_final_line_without_metrics(self) -> None:
         line = MODULE.render_final_line(

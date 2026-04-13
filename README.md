@@ -111,6 +111,24 @@ python3 scripts/extract_metrics_batch.py \
   --limit 10
 ```
 
+### Custom OpenAI-Compatible Endpoint Example
+
+Use `text` mode first when testing a third-party compatible endpoint. This is the most portable path because it only depends on chat completions compatibility.
+
+```bash
+export OPENAI_API_KEY=your_key
+
+python3 scripts/extract_metrics_batch.py \
+  --paper-root Paper \
+  --provider custom \
+  --base-url https://your-compatible-endpoint/v1 \
+  --model your-model-name \
+  --api-key-env OPENAI_API_KEY \
+  --input-mode text \
+  --run-name custom_text_v1 \
+  --limit 10
+```
+
 Remove `--limit` for a full run. Add `--resume` to continue an interrupted run without reprocessing completed papers.
 
 ## Outputs
@@ -134,6 +152,7 @@ The script supports:
 - `--api-key-env`
 - `--run-name`
 - `--input-mode`
+- `--prompt-language`
 - `--resume`
 - `--limit`
 - `--paper-id`
@@ -148,11 +167,24 @@ See full help with:
 python3 scripts/extract_metrics_batch.py --help
 ```
 
+Prompt language can be switched with:
+
+```bash
+--prompt-language en
+```
+
+or
+
+```bash
+--prompt-language cn
+```
+
 ## Development Notes
 
 - The extractor uses `pypdf` for local text extraction.
 - It sends only a selected subset of pages to the LLM rather than the full PDF text.
 - In `pdf_direct` mode, it uploads the local PDF to the OpenAI Files API and deletes the uploaded file after each request by default.
+- `pdf_direct` is validated against official OpenAI. A third-party compatible endpoint may support it, but that depends on whether it also implements the Files API and Responses API file input flow.
 - It does not hard-code provider-specific logic.
 - It is built to keep running even if individual PDFs fail.
 
