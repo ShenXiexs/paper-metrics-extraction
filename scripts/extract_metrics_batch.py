@@ -50,9 +50,9 @@ ALLOWED_METHODS = [
     "not_reported",
 ]
 METHOD_LABELS = {
-    "cross_validation": "Cross-validation",
-    "independent_test_set": "Independent test set",
-    "external_validation": "External validation",
+    "cross_validation": "交叉验证",
+    "independent_test_set": "独立测试集",
+    "external_validation": "外部验证",
     "not_reported": "未说明",
 }
 KEYWORD_PATTERNS = {
@@ -98,8 +98,9 @@ Core extraction rules:
 3. If multiple models are reported, keep only the best-performing or most emphasized result set.
 4. Ensure strict one-to-one mapping between each metric and each reported value.
 5. If a metric is mentioned but no concrete value is reported, set its value to "Not reported".
-6. If the paper does not report any quantitative metrics relevant to prediction, classification, screening, recognition, or detection, set has_quantitative_metrics to false and return an empty metrics array.
-7. Return a single JSON object only. Do not use Markdown. Do not add commentary.
+6. Only keep metrics that are genuinely predictive or classification performance metrics. Do NOT extract intervention effectiveness statistics, hypothesis-test outputs, questionnaire score changes, usability scores, p-values, effect sizes, mean differences, or baseline/follow-up scale scores unless they are directly used as prediction performance metrics.
+7. If the paper does not report any quantitative metrics relevant to prediction, classification, screening, recognition, or detection, set has_quantitative_metrics to false and return an empty metrics array.
+8. Return a single JSON object only. Do not use Markdown. Do not add commentary.
 
 Normalize metric categories to one of:
 - Accuracy
@@ -158,8 +159,9 @@ Expected JSON schema:
 3. 若有多个模型，只保留论文中表现最优或作者最强调的一组结果。
 4. 必须保证“指标-数值”严格一一对应。
 5. 若提到了某个指标但没有给出具体数值，则该指标的数值写为“未报告数值”。
-6. 若论文没有报告与预测、分类、筛查、识别、检测相关的定量指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
-7. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
+6. 只保留真正属于预测性能、分类性能、筛查性能、识别性能的指标。不要提取干预效果统计、假设检验结果、问卷分数变化、可用性分数、p 值、effect size、mean difference、基线/随访量表分数，除非这些量本身被直接作为预测性能指标使用。
+7. 若论文没有报告与预测、分类、筛查、识别、检测相关的定量指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
+8. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
 
 指标类别标准化为以下之一：
 - Accuracy
@@ -243,6 +245,10 @@ class PaperRecord:
     title: str
     authors: str
     year: str
+    extracted_page_count: int
+    sent_page_count: int
+    sent_char_count: int
+    truncated: bool
     has_quantitative_metrics: bool
     metrics: list[dict[str, Any]]
     evaluation_methods: list[str]
@@ -264,9 +270,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-name", required=True, help="Output directory name under results/.")
     parser.add_argument(
         "--input-mode",
-        choices=["text", "pdf_direct"],
+        choices=["text", "text_full", "pdf_direct"],
         default="text",
-        help="Use local PDF-to-text extraction or upload the PDF directly to the API.",
+        help="Use selective local PDF-to-text extraction, fuller local PDF-to-text extraction, or upload the PDF directly to the API.",
     )
     parser.add_argument(
         "--prompt-language",
@@ -482,6 +488,33 @@ def select_context_pages(pages: list[str], char_budget: int) -> tuple[str, list[
     return "\n".join(pieces).strip(), kept_pages
 
 
+def build_full_context(pages: list[str], char_budget: int) -> tuple[str, list[int]]:
+    if not pages:
+        return "", []
+
+    pieces: list[str] = []
+    kept_pages: list[int] = []
+    total_chars = 0
+    for index, page in enumerate(pages):
+        page_text = normalize_whitespace(page)
+        if not page_text:
+            continue
+        header = f"[Page {index + 1}]\n"
+        block = header + page_text + "\n"
+        if total_chars + len(block) > char_budget:
+            remaining = char_budget - total_chars - len(header) - 1
+            if remaining <= 0:
+                break
+            block = header + trim_text(page_text, remaining) + "\n"
+            pieces.append(block)
+            kept_pages.append(index + 1)
+            break
+        pieces.append(block)
+        kept_pages.append(index + 1)
+        total_chars += len(block)
+    return "\n".join(pieces).strip(), kept_pages
+
+
 def get_system_prompt(prompt_language: str) -> str:
     return SYSTEM_PROMPTS.get(prompt_language, SYSTEM_PROMPTS["en"])
 
@@ -518,6 +551,7 @@ def build_text_mode_prompt(
 - 只根据原文提取，不得补全缺失信息。
 - 若论文没有报告任何定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
 - 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+- 以下文本可能是从整篇论文中筛选出的关键页面片段，而不是全文。
 
 论文文本：
 {context_text}
@@ -543,6 +577,75 @@ Please do the following:
 5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
 
 Important:
+- Extract strictly from the paper text. Do not fill in missing information.
+- If the paper does not report any quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
+- If a metric is mentioned but no concrete value is given, use "Not reported" in values.
+- The text below may be a selected evidence-focused subset rather than the full paper.
+
+Paper text:
+{context_text}
+"""
+
+
+def build_text_full_mode_prompt(
+    paper_id: str,
+    pdf_path: Path,
+    filename_meta: dict[str, str],
+    front_matter_meta: dict[str, str],
+    context_text: str,
+    prompt_language: str = "en",
+) -> str:
+    if prompt_language == "cn":
+        return f"""请从以下论文全文文本中提取结构化定量评估信息。
+
+论文信息：
+- paper_id: {paper_id}
+- pdf_path: {pdf_path}
+- filename_title_candidate: {filename_meta.get("title", "")}
+- filename_authors_candidate: {filename_meta.get("authors", "")}
+- filename_year_candidate: {filename_meta.get("year", "")}
+- front_matter_title_candidate: {front_matter_meta.get("title", "")}
+- front_matter_authors_candidate: {front_matter_meta.get("authors", "")}
+- front_matter_year_candidate: {front_matter_meta.get("year", "")}
+
+请完成以下任务：
+1. 判断论文是否明确报告了与精神疾病或精神健康相关的预测、分类、筛查、识别、检测任务的定量评估指标。
+2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
+3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+4. 评估方法只保留最合适的一项：cross_validation、independent_test_set、external_validation、not_reported。
+5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
+
+附加说明：
+- 以下文本按页顺序来自论文全文；若因长度限制被截断，也应优先基于已提供的全文顺序文本提取。
+- 只根据原文提取，不得补全缺失信息。
+- 若论文没有报告任何定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
+- 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
+
+论文文本：
+{context_text}
+"""
+
+    return f"""Extract structured quantitative evaluation information from the full paper text below.
+
+Paper info:
+- paper_id: {paper_id}
+- pdf_path: {pdf_path}
+- filename_title_candidate: {filename_meta.get("title", "")}
+- filename_authors_candidate: {filename_meta.get("authors", "")}
+- filename_year_candidate: {filename_meta.get("year", "")}
+- front_matter_title_candidate: {front_matter_meta.get("title", "")}
+- front_matter_authors_candidate: {front_matter_meta.get("authors", "")}
+- front_matter_year_candidate: {front_matter_meta.get("year", "")}
+
+Please do the following:
+1. Decide whether the paper explicitly reports quantitative evaluation metrics for mental disorder or mental health prediction, classification, screening, recognition, or detection tasks.
+2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
+3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+4. Keep only the single most appropriate evaluation method from: cross_validation, independent_test_set, external_validation, not_reported.
+5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
+
+Important:
+- The text below is the full paper text in page order, unless truncated due to length limits.
 - Extract strictly from the paper text. Do not fill in missing information.
 - If the paper does not report any quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
 - If a metric is mentioned but no concrete value is given, use "Not reported" in values.
@@ -849,6 +952,69 @@ def normalize_page_numbers(value: Any) -> list[int]:
     return sorted(dict.fromkeys(page_numbers))
 
 
+def is_prediction_performance_metric(metric: dict[str, Any]) -> bool:
+    category = normalize_whitespace(str(metric.get("category", "")))
+    if category in {
+        "Accuracy",
+        "AUC",
+        "ROC-AUC",
+        "PR-AUC",
+        "Sensitivity",
+        "Specificity",
+        "Precision",
+        "F1",
+        "Dice",
+        "IoU",
+        "MAE",
+        "RMSE",
+    }:
+        return True
+
+    text = " ".join(
+        [
+            normalize_whitespace(str(metric.get("raw_name", ""))),
+            " ".join(normalize_string_list(metric.get("contexts"))),
+            normalize_whitespace(str(metric.get("evidence_snippet", ""))),
+        ]
+    ).lower()
+
+    non_predictive_patterns = [
+        r"\bp[\s-]?value\b",
+        r"\beffect size\b",
+        r"\bmann",
+        r"\bwilcoxon\b",
+        r"\bt[- ]?test\b",
+        r"\banova\b",
+        r"\bmean difference\b",
+        r"\bphq[- ]?9\b",
+        r"\bgad[- ]?7\b",
+        r"\bscore\b",
+        r"\bbaseline\b",
+        r"\bfollow[- ]?up\b",
+        r"\bpost[- ]?test\b",
+        r"\bpre[- ]?test\b",
+        r"\bcohen'?s d\b",
+        r"\bconfidence interval\b",
+        r"\bodds ratio\b",
+        r"\bhazard ratio\b",
+        r"\bregression\b",
+    ]
+    if any(re.search(pattern, text, re.IGNORECASE) for pattern in non_predictive_patterns):
+        return False
+
+    predictive_other_patterns = [
+        r"\bbalanced accuracy\b",
+        r"\bmcc\b",
+        r"\bconcordance index\b",
+        r"\bc-index\b",
+        r"\bclassification performance\b",
+        r"\bprediction performance\b",
+        r"\bscreening performance\b",
+        r"\bdiagnostic performance\b",
+    ]
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in predictive_other_patterns)
+
+
 def normalize_metric_items(metrics: Any) -> list[dict[str, Any]]:
     if not isinstance(metrics, list):
         return []
@@ -876,7 +1042,7 @@ def normalize_metric_items(metrics: Any) -> list[dict[str, Any]]:
                 page_numbers=[],
             )
         normalized.append(asdict(metric))
-    return normalized
+    return [metric for metric in normalized if is_prediction_performance_metric(metric)]
 
 
 def normalize_evaluation_methods(methods: Any) -> list[str]:
@@ -900,6 +1066,21 @@ def normalize_evaluation_methods(methods: Any) -> list[str]:
         if preferred in deduped:
             return [preferred]
     return [deduped[0]]
+
+
+def infer_evaluation_methods_from_text(text: str) -> list[str]:
+    text = normalize_whitespace(text).lower()
+    if not text:
+        return ["not_reported"]
+
+    candidates: list[str] = []
+    if any(token in text for token in ["external validation", "external dataset", "external cohort", "external hospital", "external test set"]):
+        candidates.append("external_validation")
+    if any(token in text for token in ["train/test split", "train/validation/test", "test set", "held-out test", "holdout set", "independent test set"]):
+        candidates.append("independent_test_set")
+    if any(token in text for token in ["cross-validation", "cross validation", "k-fold", "k fold", "leave-one-out", "loo cross"]):
+        candidates.append("cross_validation")
+    return normalize_evaluation_methods(candidates)
 
 
 def normalize_evidence(evidence: Any, metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -948,22 +1129,22 @@ def render_metric_values(metrics: list[dict[str, Any]]) -> str:
         category = metric.get("category", "Other")
         values = normalize_string_list(metric.get("values"))
         contexts = normalize_string_list(metric.get("contexts"))
-        display_value = " / ".join(values) if values else "未提取"
+        display_value = " / ".join(values) if values else "未报告数值"
         if contexts:
             display_value = f"{display_value} ({' / '.join(contexts)})"
         parts.append(f"{category}={display_value}")
-    return "; ".join(parts)
+    return ", ".join(parts)
 
 
 def render_final_line(authors: str, year: str, metrics: list[dict[str, Any]], methods: list[str], fallback_key: str) -> str:
     citation_key = build_citation_key(authors, year, fallback_key)
-    if not metrics:
-        return f"[{citation_key}] | 指标: 无定量指标 | 数值: 无 | 方法: 未说明"
-
-    categories = "; ".join(dict.fromkeys(metric["category"] for metric in metrics))
-    values = render_metric_values(metrics)
-    method_labels = "; ".join(METHOD_LABELS.get(method, method) for method in methods if method != "not_reported")
+    method_labels = ", ".join(METHOD_LABELS.get(method, method) for method in methods if method != "not_reported")
     method_labels = method_labels or "未说明"
+    if not metrics:
+        return f"[{citation_key}] | 指标: [无定量指标] | 数值: [无] | 方法: [{method_labels}]"
+
+    categories = ", ".join(dict.fromkeys(metric["category"] for metric in metrics))
+    values = render_metric_values(metrics)
     return f"[{citation_key}] | 指标: [{categories}] | 数值: [{values}] | 方法: [{method_labels}]"
 
 
@@ -973,6 +1154,11 @@ def build_paper_record(
     filename_meta: dict[str, str],
     front_meta: dict[str, str],
     llm_payload: dict[str, Any],
+    extracted_page_count: int,
+    sent_page_count: int,
+    sent_char_count: int,
+    truncated: bool,
+    method_hints: list[str] | None = None,
 ) -> dict[str, Any]:
     metrics = normalize_metric_items(llm_payload.get("metrics"))
     has_quantitative_metrics = bool(llm_payload.get("has_quantitative_metrics")) and bool(metrics)
@@ -980,8 +1166,8 @@ def build_paper_record(
         metrics = []
 
     methods = normalize_evaluation_methods(llm_payload.get("evaluation_methods"))
-    if not has_quantitative_metrics:
-        methods = ["not_reported"]
+    if methods == ["not_reported"] and method_hints:
+        methods = method_hints
 
     title = pick_first_non_empty(str(llm_payload.get("title", "")), filename_meta.get("title", ""), front_meta.get("title", ""), pdf_path.stem)
     authors = pick_first_non_empty(normalize_authors(llm_payload.get("authors")), filename_meta.get("authors", ""), front_meta.get("authors", ""), "Unknown")
@@ -996,6 +1182,10 @@ def build_paper_record(
         title=title,
         authors=authors,
         year=year,
+        extracted_page_count=extracted_page_count,
+        sent_page_count=sent_page_count,
+        sent_char_count=sent_char_count,
+        truncated=truncated,
         has_quantitative_metrics=has_quantitative_metrics,
         metrics=metrics,
         evaluation_methods=methods,
@@ -1013,19 +1203,30 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
     try:
         front_meta = {"title": "", "authors": "", "year": ""}
         selected_pages: list[int] = []
+        method_hints = ["not_reported"]
+        extracted_page_count = 0
+        sent_char_count = 0
+        truncated = False
 
-        if extractor.config.input_mode == "text":
+        if extractor.config.input_mode in {"text", "text_full"}:
             pages = read_pdf_pages(pdf_path)
             if not any(page.strip() for page in pages):
                 raise RuntimeError("No extractable text found in PDF.")
 
+            extracted_page_count = len(pages)
             front_meta = extract_front_matter_candidates(pages[:2])
-            context_text, selected_pages = select_context_pages(pages, char_budget)
+            method_hints = infer_evaluation_methods_from_text(" ".join(pages))
+            if extractor.config.input_mode == "text_full":
+                context_text, selected_pages = build_full_context(pages, char_budget)
+            else:
+                context_text, selected_pages = select_context_pages(pages, char_budget)
             if not context_text:
                 raise RuntimeError("No context selected from PDF text.")
+            sent_char_count = len(context_text)
+            truncated = sent_char_count >= char_budget or len(selected_pages) < extracted_page_count
 
-            llm_payload = extractor.extract(
-                build_text_mode_prompt(
+            if extractor.config.input_mode == "text_full":
+                user_prompt = build_text_full_mode_prompt(
                     paper_id=paper_id,
                     pdf_path=pdf_path,
                     filename_meta=filename_meta,
@@ -1033,7 +1234,16 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
                     context_text=context_text,
                     prompt_language=extractor.config.prompt_language,
                 )
-            )
+            else:
+                user_prompt = build_text_mode_prompt(
+                    paper_id=paper_id,
+                    pdf_path=pdf_path,
+                    filename_meta=filename_meta,
+                    front_matter_meta=front_meta,
+                    context_text=context_text,
+                    prompt_language=extractor.config.prompt_language,
+                )
+            llm_payload = extractor.extract(user_prompt)
         else:
             llm_payload = extractor.extract(
                 build_pdf_direct_prompt(
@@ -1050,9 +1260,23 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
             filename_meta=filename_meta,
             front_meta=front_meta,
             llm_payload=llm_payload,
+            extracted_page_count=extracted_page_count,
+            sent_page_count=len(selected_pages),
+            sent_char_count=sent_char_count,
+            truncated=truncated,
+            method_hints=method_hints,
         )
         record["input_mode"] = extractor.config.input_mode
         record["context_page_numbers"] = selected_pages
+        LOGGER.info(
+            "paper_id=%s | mode=%s | extracted_pages=%s | sent_pages=%s | sent_chars=%s | truncated=%s",
+            paper_id,
+            extractor.config.input_mode,
+            extracted_page_count,
+            len(selected_pages),
+            sent_char_count,
+            truncated,
+        )
         return record, None
     except Exception as exc:
         error_payload = {
@@ -1109,18 +1333,22 @@ def flatten_record_for_csv(record: dict[str, Any]) -> dict[str, Any]:
     metrics = record.get("metrics", [])
     methods = record.get("evaluation_methods", [])
     return {
-        "paper_id": record.get("paper_id", ""),
+        "folder_id": record.get("paper_id", ""),
+        "result_line": record.get("final_line", ""),
         "input_mode": record.get("input_mode", ""),
+        "extracted_page_count": record.get("extracted_page_count", ""),
+        "sent_page_count": record.get("sent_page_count", ""),
+        "sent_char_count": record.get("sent_char_count", ""),
+        "truncated": record.get("truncated", ""),
         "title": record.get("title", ""),
         "authors": record.get("authors", ""),
         "year": record.get("year", ""),
         "pdf_path": record.get("pdf_path", ""),
         "has_quantitative_metrics": record.get("has_quantitative_metrics", False),
-        "metric_categories": "; ".join(dict.fromkeys(metric.get("category", "") for metric in metrics if metric.get("category"))),
+        "metric_categories": ", ".join(dict.fromkeys(metric.get("category", "") for metric in metrics if metric.get("category"))),
         "metric_values": render_metric_values(metrics),
-        "evaluation_methods": "; ".join(METHOD_LABELS.get(method, method) for method in methods),
+        "evaluation_methods": ", ".join(METHOD_LABELS.get(method, method) for method in methods),
         "confidence": record.get("confidence", ""),
-        "final_line": record.get("final_line", ""),
     }
 
 
@@ -1133,8 +1361,13 @@ def materialize_outputs(records_path: Path, summary_csv_path: Path, lines_txt_pa
         writer = csv.DictWriter(
             handle,
             fieldnames=[
-                "paper_id",
+                "folder_id",
+                "result_line",
                 "input_mode",
+                "extracted_page_count",
+                "sent_page_count",
+                "sent_char_count",
+                "truncated",
                 "title",
                 "authors",
                 "year",
@@ -1144,7 +1377,6 @@ def materialize_outputs(records_path: Path, summary_csv_path: Path, lines_txt_pa
                 "metric_values",
                 "evaluation_methods",
                 "confidence",
-                "final_line",
             ],
         )
         writer.writeheader()
@@ -1159,12 +1391,13 @@ def materialize_outputs(records_path: Path, summary_csv_path: Path, lines_txt_pa
 
 def persist_run_config(output_dir: Path, config: ProviderConfig, args: argparse.Namespace, scheduled_count: int) -> None:
     config_path = output_dir / "run_config.json"
+    requested_ids = sorted(parse_requested_paper_ids(args.paper_id), key=numeric_sort_key)
     payload = {
         "provider": asdict(config),
         "paper_root": str(Path(args.paper_root).resolve()),
         "run_name": args.run_name,
         "limit": args.limit,
-        "paper_ids": parse_requested_paper_ids(args.paper_id),
+        "paper_ids": requested_ids,
         "char_budget": args.char_budget,
         "input_mode": args.input_mode,
         "prompt_language": args.prompt_language,

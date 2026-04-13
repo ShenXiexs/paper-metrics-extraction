@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+from argparse import Namespace
 import sys
 import tempfile
 import unittest
@@ -61,6 +62,22 @@ class ExtractMetricsBatchTests(unittest.TestCase):
         self.assertIn("[Page 3]", context)
         self.assertIn(3, page_numbers)
 
+    def test_build_full_context_keeps_page_order(self) -> None:
+        pages = [
+            "Page one content.",
+            "Page two content.",
+            "Page three content.",
+        ]
+        context, page_numbers = MODULE.build_full_context(pages, char_budget=5000)
+        self.assertIn("[Page 1]", context)
+        self.assertIn("[Page 2]", context)
+        self.assertIn("[Page 3]", context)
+        self.assertEqual(page_numbers, [1, 2, 3])
+
+    def test_infer_evaluation_methods_from_text(self) -> None:
+        text = "We used 10-fold cross-validation on the training data and evaluated on a held-out test set."
+        self.assertEqual(MODULE.infer_evaluation_methods_from_text(text), ["independent_test_set"])
+
     def test_normalize_metric_category(self) -> None:
         self.assertEqual(MODULE.normalize_metric_category("roc auc"), "AUC")
         self.assertEqual(MODULE.normalize_metric_category("recall"), "Sensitivity")
@@ -70,6 +87,37 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             MODULE.normalize_metric_category("Matthews correlation coefficient", "Matthews correlation coefficient"),
             "Other:Matthews correlation coefficient",
         )
+
+    def test_normalize_metric_items_filters_non_predictive_statistics(self) -> None:
+        metrics = MODULE.normalize_metric_items(
+            [
+                {
+                    "category": "Other:Mann–Whitney U (p value)",
+                    "raw_name": "Mann–Whitney U (p value)",
+                    "values": ["0.004"],
+                    "contexts": ["significant reduction in depressive symptoms"],
+                    "evidence_snippet": "Mann–Whitney U test p value = 0.004.",
+                    "page_numbers": [5],
+                }
+            ]
+        )
+        self.assertEqual(metrics, [])
+
+    def test_normalize_metric_items_keeps_predictive_other_metric(self) -> None:
+        metrics = MODULE.normalize_metric_items(
+            [
+                {
+                    "category": "Other:balanced accuracy",
+                    "raw_name": "balanced accuracy",
+                    "values": ["0.81"],
+                    "contexts": ["classification performance on held-out test set"],
+                    "evidence_snippet": "Balanced accuracy was 0.81 on the held-out test set.",
+                    "page_numbers": [7],
+                }
+            ]
+        )
+        self.assertEqual(len(metrics), 1)
+        self.assertEqual(metrics[0]["category"], "Accuracy")
 
     def test_build_pdf_direct_input(self) -> None:
         payload = MODULE.build_pdf_direct_input("file-123", "Extract metrics.")
@@ -105,10 +153,37 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             authors="Ali 等",
             year="2020",
             metrics=[],
-            methods=["not_reported"],
+            methods=["cross_validation"],
             fallback_key="fallback",
         )
-        self.assertEqual(line, "[Ali_2020] | 指标: 无定量指标 | 数值: 无 | 方法: 未说明")
+        self.assertEqual(line, "[Ali_2020] | 指标: [无定量指标] | 数值: [无] | 方法: [交叉验证]")
+
+    def test_build_paper_record_preserves_method_hints_without_metrics(self) -> None:
+        record = MODULE.build_paper_record(
+            paper_id="1",
+            pdf_path=Path("Paper/1/test.pdf"),
+            filename_meta={"title": "Test", "authors": "Ali 等", "year": "2020"},
+            front_meta={"title": "", "authors": "", "year": ""},
+            llm_payload={
+                "title": "Test",
+                "authors": "Ali 等",
+                "year": "2020",
+                "has_quantitative_metrics": False,
+                "metrics": [],
+                "evaluation_methods": [],
+            },
+            extracted_page_count=12,
+            sent_page_count=8,
+            sent_char_count=42000,
+            truncated=True,
+            method_hints=["independent_test_set"],
+        )
+        self.assertEqual(record["evaluation_methods"], ["independent_test_set"])
+        self.assertIn("独立测试集", record["final_line"])
+        self.assertEqual(record["extracted_page_count"], 12)
+        self.assertEqual(record["sent_page_count"], 8)
+        self.assertEqual(record["sent_char_count"], 42000)
+        self.assertTrue(record["truncated"])
 
     def test_load_completed_paper_ids(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -125,6 +200,32 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             )
             self.assertEqual(MODULE.load_completed_paper_ids(records_path), {"1", "2"})
 
+    def test_persist_run_config_serializes_paper_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir) / "results" / "test_run"
+            config = MODULE.ProviderConfig(
+                provider="custom",
+                base_url="https://example.com/v1",
+                api_key_env="OPENAI_API_KEY",
+                model="gpt-test",
+                input_mode="text",
+                prompt_language="en",
+            )
+            args = Namespace(
+                paper_root="Paper",
+                run_name="test_run",
+                limit=10,
+                paper_id=["3,1", "2"],
+                char_budget=24000,
+                input_mode="text",
+                prompt_language="en",
+                keep_uploaded_files=False,
+                resume=False,
+            )
+            MODULE.persist_run_config(output_dir, config, args, scheduled_count=3)
+            payload = json.loads((output_dir / "run_config.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["paper_ids"], ["1", "2", "3"])
+
     def test_materialize_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -134,6 +235,10 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             payload = {
                 "paper_id": "1",
                 "input_mode": "text",
+                "extracted_page_count": 12,
+                "sent_page_count": 8,
+                "sent_char_count": 42000,
+                "truncated": True,
                 "title": "Test Paper",
                 "authors": "Ali 等",
                 "year": "2020",
@@ -151,13 +256,17 @@ class ExtractMetricsBatchTests(unittest.TestCase):
                 ],
                 "evaluation_methods": ["independent_test_set"],
                 "evidence": [{"snippet": "Accuracy was 0.84.", "page_numbers": [5]}],
-                "final_line": "[Ali_2020] | 指标: [Accuracy] | 数值: [Accuracy=0.84 (held-out test set)] | 方法: [Independent test set]",
+                "final_line": "[Ali_2020] | 指标: [Accuracy] | 数值: [Accuracy=0.84 (held-out test set)] | 方法: [独立测试集]",
                 "confidence": 0.9,
                 "error": None,
             }
             records_path.write_text(json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8")
             MODULE.materialize_outputs(records_path, summary_path, lines_path)
-            self.assertIn("Test Paper", summary_path.read_text(encoding="utf-8"))
+            summary_text = summary_path.read_text(encoding="utf-8")
+            self.assertIn("Test Paper", summary_text)
+            self.assertTrue(summary_text.splitlines()[0].startswith("folder_id,result_line,"))
+            self.assertTrue(summary_text.splitlines()[1].startswith("1,"))
+            self.assertIn("42000", summary_text)
             self.assertIn("[Ali_2020]", lines_path.read_text(encoding="utf-8"))
 
 

@@ -9,6 +9,7 @@ This repository is designed for a workflow where the paper corpus stays local.
 The main script scans a local `Paper/` directory and supports two extraction modes:
 
 - `text`: read the PDF locally with `pypdf`, select evidence-focused text, and send only that text to the API
+- `text_full`: read the PDF locally with `pypdf` and send the extracted text in page order up to the character budget
 - `pdf_direct`: upload the local PDF itself through the Files API and pass it to the Responses API as an `input_file`
 
 In both modes, the script extracts:
@@ -48,7 +49,7 @@ Local-only files are intentionally excluded from version control:
 Example install:
 
 ```bash
-pip install openai pypdf
+pip install -r requirements.txt
 ```
 
 ## Quick Start
@@ -77,6 +78,23 @@ python3 scripts/extract_metrics_batch.py \
   --input-mode text \
   --run-name chatgpt_gpt41_v1 \
   --limit 10
+```
+
+Text-full mode:
+
+```bash
+export OPENAI_API_KEY=your_key
+
+python3 scripts/extract_metrics_batch.py \
+  --paper-root Paper \
+  --provider openai \
+  --base-url https://api.openai.com/v1 \
+  --model gpt-4.1 \
+  --api-key-env OPENAI_API_KEY \
+  --input-mode text_full \
+  --run-name chatgpt_gpt41_textfull_v1 \
+  --limit 10 \
+  --char-budget 80000
 ```
 
 Direct PDF mode with official OpenAI:
@@ -136,10 +154,19 @@ Remove `--limit` for a full run. Add `--resume` to continue an interrupted run w
 Each run writes to `results/<run_name>/`:
 
 - `records.jsonl`: full structured extraction records
-- `summary.csv`: tabular summary for manual review
+- `summary.csv`: tabular summary for manual review, with `folder_id` as the first column and `result_line` as the second column
 - `lines.txt`: one final delivery line per paper
 - `errors.jsonl`: per-paper failures that did not stop the batch
 - `run_config.json`: run-time configuration snapshot
+
+The structured outputs also include context diagnostics:
+
+- `extracted_page_count`
+- `sent_page_count`
+- `sent_char_count`
+- `truncated`
+
+These fields help you judge whether `text` or `text_full` sent only part of the extracted paper text.
 
 ## CLI Parameters
 
