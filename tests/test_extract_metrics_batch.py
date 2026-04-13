@@ -69,6 +69,12 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             "Other:Matthews correlation coefficient",
         )
 
+    def test_build_pdf_direct_input(self) -> None:
+        payload = MODULE.build_pdf_direct_input("file-123", "Extract metrics.")
+        self.assertEqual(payload[0]["role"], "user")
+        self.assertEqual(payload[0]["content"][0], {"type": "input_file", "file_id": "file-123"})
+        self.assertEqual(payload[0]["content"][1], {"type": "input_text", "text": "Extract metrics."})
+
     def test_normalize_evaluation_methods(self) -> None:
         methods = MODULE.normalize_evaluation_methods(
             ["10-fold cross-validation", "held-out test set", "external dataset validation"]
@@ -111,6 +117,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             lines_path = root / "lines.txt"
             payload = {
                 "paper_id": "1",
+                "input_mode": "text",
                 "title": "Test Paper",
                 "authors": "Ali 等",
                 "year": "2020",

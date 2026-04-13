@@ -6,7 +6,12 @@ This repository is designed for a workflow where the paper corpus stays local.
 
 ## What It Does
 
-The main script scans a local `Paper/` directory, reads each PDF, builds a compact evidence-focused context, and sends that context to an OpenAI-compatible LLM API to extract:
+The main script scans a local `Paper/` directory and supports two extraction modes:
+
+- `text`: read the PDF locally with `pypdf`, select evidence-focused text, and send only that text to the API
+- `pdf_direct`: upload the local PDF itself through the Files API and pass it to the Responses API as an `input_file`
+
+In both modes, the script extracts:
 
 - whether the paper reports quantitative predictive performance metrics
 - which metrics are reported
@@ -58,6 +63,8 @@ Then run the extractor with an OpenAI-compatible API.
 
 ### OpenAI Example
 
+Text mode:
+
 ```bash
 export OPENAI_API_KEY=your_key
 
@@ -67,7 +74,24 @@ python3 scripts/extract_metrics_batch.py \
   --base-url https://api.openai.com/v1 \
   --model gpt-4.1 \
   --api-key-env OPENAI_API_KEY \
+  --input-mode text \
   --run-name chatgpt_gpt41_v1 \
+  --limit 10
+```
+
+Direct PDF mode with official OpenAI:
+
+```bash
+export OPENAI_API_KEY=your_key
+
+python3 scripts/extract_metrics_batch.py \
+  --paper-root Paper \
+  --provider openai \
+  --base-url https://api.openai.com/v1 \
+  --model gpt-5 \
+  --api-key-env OPENAI_API_KEY \
+  --input-mode pdf_direct \
+  --run-name chatgpt_gpt5_pdfdirect_v1 \
   --limit 10
 ```
 
@@ -82,6 +106,7 @@ python3 scripts/extract_metrics_batch.py \
   --base-url https://api.deepseek.com/v1 \
   --model deepseek-chat \
   --api-key-env DEEPSEEK_API_KEY \
+  --input-mode text \
   --run-name deepseek_chat_v1 \
   --limit 10
 ```
@@ -108,12 +133,14 @@ The script supports:
 - `--model`
 - `--api-key-env`
 - `--run-name`
+- `--input-mode`
 - `--resume`
 - `--limit`
 - `--paper-id`
 - `--char-budget`
 - `--max-retries`
 - `--concurrency`
+- `--keep-uploaded-files`
 
 See full help with:
 
@@ -125,6 +152,7 @@ python3 scripts/extract_metrics_batch.py --help
 
 - The extractor uses `pypdf` for local text extraction.
 - It sends only a selected subset of pages to the LLM rather than the full PDF text.
+- In `pdf_direct` mode, it uploads the local PDF to the OpenAI Files API and deletes the uploaded file after each request by default.
 - It does not hard-code provider-specific logic.
 - It is built to keep running even if individual PDFs fail.
 

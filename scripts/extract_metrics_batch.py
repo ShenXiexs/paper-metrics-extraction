@@ -130,10 +130,12 @@ class ProviderConfig:
     base_url: str
     api_key_env: str
     model: str
+    input_mode: str = "text"
     temperature: float = 0.0
     timeout: float = 180.0
     max_retries: int = 3
     concurrency: int = 4
+    keep_uploaded_files: bool = False
 
 
 @dataclass
@@ -172,6 +174,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", required=True, help="Model name to call.")
     parser.add_argument("--api-key-env", required=True, help="Environment variable holding the API key.")
     parser.add_argument("--run-name", required=True, help="Output directory name under results/.")
+    parser.add_argument(
+        "--input-mode",
+        choices=["text", "pdf_direct"],
+        default="text",
+        help="Use local PDF-to-text extraction or upload the PDF directly to the API.",
+    )
     parser.add_argument("--resume", action="store_true", help="Skip paper_ids already present in records.jsonl.")
     parser.add_argument("--limit", type=int, default=None, help="Process at most N papers after filtering.")
     parser.add_argument(
@@ -188,6 +196,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-retries", type=int, default=3, help="Maximum API retries per paper.")
     parser.add_argument("--concurrency", type=int, default=4, help="Concurrent papers to process.")
+    parser.add_argument(
+        "--keep-uploaded-files",
+        action="store_true",
+        help="When using pdf_direct mode, keep uploaded Files API objects instead of deleting them after each call.",
+    )
     return parser.parse_args()
 
 
@@ -375,7 +388,7 @@ def select_context_pages(pages: list[str], char_budget: int) -> tuple[str, list[
     return "\n".join(pieces).strip(), kept_pages
 
 
-def build_user_prompt(
+def build_text_mode_prompt(
     paper_id: str,
     pdf_path: Path,
     filename_meta: dict[str, str],
@@ -407,6 +420,34 @@ Important:
 
 Paper text:
 {context_text}
+"""
+
+
+def build_pdf_direct_prompt(
+    paper_id: str,
+    pdf_path: Path,
+    filename_meta: dict[str, str],
+) -> str:
+    return f"""Extract structured information from the attached paper PDF.
+
+Paper info:
+- paper_id: {paper_id}
+- pdf_path: {pdf_path}
+- filename_title_candidate: {filename_meta.get("title", "")}
+- filename_authors_candidate: {filename_meta.get("authors", "")}
+- filename_year_candidate: {filename_meta.get("year", "")}
+
+Extraction target:
+1. Decide whether the paper explicitly reports quantitative predictive / classification / screening performance metrics for mental disorder or mental health related prediction tasks.
+2. If yes, extract every reported metric and its concrete values.
+3. Extract evaluation method labels from only: cross_validation, independent_test_set, external_validation. If not clear, use not_reported.
+4. Also return title, authors, and year. Prefer explicit paper evidence over filename guesses.
+
+Important:
+- The attached PDF is the primary source. Use filename candidates only as fallback metadata hints.
+- The paper may be about interventions or chatbots and may contain no predictive metrics. In that case set has_quantitative_metrics to false.
+- Keep values exactly as reported when possible.
+- Keep evidence snippets short.
 """
 
 
@@ -466,11 +507,15 @@ class LLMExtractor:
             raise RuntimeError(f"Missing API key env var: {self.config.api_key_env}")
         return OpenAI(api_key=api_key, base_url=self.config.base_url, timeout=self.config.timeout)
 
-    def extract(self, user_prompt: str) -> dict[str, Any]:
+    def extract(self, user_prompt: str, pdf_path: Path | None = None) -> dict[str, Any]:
         last_exc: Exception | None = None
         for attempt in range(1, self.config.max_retries + 1):
             try:
-                return self._extract_once(user_prompt)
+                if self.config.input_mode == "pdf_direct":
+                    if pdf_path is None:
+                        raise ValueError("pdf_path is required when input_mode=pdf_direct")
+                    return self._extract_once_pdf_direct(user_prompt, pdf_path)
+                return self._extract_once_text(user_prompt)
             except Exception as exc:  # pragma: no cover - retry path depends on live API
                 last_exc = exc
                 if attempt >= self.config.max_retries:
@@ -487,7 +532,7 @@ class LLMExtractor:
         assert last_exc is not None
         raise last_exc
 
-    def _extract_once(self, user_prompt: str) -> dict[str, Any]:
+    def _extract_once_text(self, user_prompt: str) -> dict[str, Any]:
         client = self._client()
         common_kwargs = {
             "model": self.config.model,
@@ -507,6 +552,56 @@ class LLMExtractor:
 
         content = response.choices[0].message.content or ""
         return parse_json_object(content)
+
+    def _extract_once_pdf_direct(self, user_prompt: str, pdf_path: Path) -> dict[str, Any]:
+        client = self._client()
+        uploaded_file_id: str | None = None
+        try:
+            with pdf_path.open("rb") as handle:
+                uploaded = client.files.create(file=handle, purpose="user_data")
+            uploaded_file_id = uploaded.id
+            response = client.responses.create(
+                model=self.config.model,
+                instructions=SYSTEM_PROMPT,
+                input=build_pdf_direct_input(uploaded_file_id, user_prompt),
+                temperature=self.config.temperature,
+            )
+            return parse_json_object(extract_response_text(response))
+        finally:
+            if uploaded_file_id and not self.config.keep_uploaded_files:
+                try:
+                    client.files.delete(uploaded_file_id)
+                except Exception as exc:  # pragma: no cover - network cleanup path
+                    LOGGER.warning("Failed to delete uploaded file %s: %s", uploaded_file_id, exc)
+
+
+def build_pdf_direct_input(file_id: str, user_prompt: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_file", "file_id": file_id},
+                {"type": "input_text", "text": user_prompt},
+            ],
+        }
+    ]
+
+
+def extract_response_text(response: Any) -> str:
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text
+
+    pieces: list[str] = []
+    for item in getattr(response, "output", []) or []:
+        if getattr(item, "type", None) != "message":
+            continue
+        for content in getattr(item, "content", []) or []:
+            if getattr(content, "type", None) == "output_text":
+                text = getattr(content, "text", "")
+                if text:
+                    pieces.append(text)
+    return "\n".join(pieces).strip()
 
 
 def normalize_year(value: Any) -> str:
@@ -743,24 +838,37 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
     paper_id = pdf_path.parent.name
     filename_meta = parse_filename_metadata(pdf_path.name)
     try:
-        pages = read_pdf_pages(pdf_path)
-        if not any(page.strip() for page in pages):
-            raise RuntimeError("No extractable text found in PDF.")
+        front_meta = {"title": "", "authors": "", "year": ""}
+        selected_pages: list[int] = []
 
-        front_meta = extract_front_matter_candidates(pages[:2])
-        context_text, selected_pages = select_context_pages(pages, char_budget)
-        if not context_text:
-            raise RuntimeError("No context selected from PDF text.")
+        if extractor.config.input_mode == "text":
+            pages = read_pdf_pages(pdf_path)
+            if not any(page.strip() for page in pages):
+                raise RuntimeError("No extractable text found in PDF.")
 
-        llm_payload = extractor.extract(
-            build_user_prompt(
-                paper_id=paper_id,
-                pdf_path=pdf_path,
-                filename_meta=filename_meta,
-                front_matter_meta=front_meta,
-                context_text=context_text,
+            front_meta = extract_front_matter_candidates(pages[:2])
+            context_text, selected_pages = select_context_pages(pages, char_budget)
+            if not context_text:
+                raise RuntimeError("No context selected from PDF text.")
+
+            llm_payload = extractor.extract(
+                build_text_mode_prompt(
+                    paper_id=paper_id,
+                    pdf_path=pdf_path,
+                    filename_meta=filename_meta,
+                    front_matter_meta=front_meta,
+                    context_text=context_text,
+                )
             )
-        )
+        else:
+            llm_payload = extractor.extract(
+                build_pdf_direct_prompt(
+                    paper_id=paper_id,
+                    pdf_path=pdf_path,
+                    filename_meta=filename_meta,
+                ),
+                pdf_path=pdf_path,
+            )
         record = build_paper_record(
             paper_id=paper_id,
             pdf_path=pdf_path,
@@ -768,6 +876,7 @@ def process_one_paper(pdf_path: Path, extractor: LLMExtractor, char_budget: int)
             front_meta=front_meta,
             llm_payload=llm_payload,
         )
+        record["input_mode"] = extractor.config.input_mode
         record["context_page_numbers"] = selected_pages
         return record, None
     except Exception as exc:
@@ -826,6 +935,7 @@ def flatten_record_for_csv(record: dict[str, Any]) -> dict[str, Any]:
     methods = record.get("evaluation_methods", [])
     return {
         "paper_id": record.get("paper_id", ""),
+        "input_mode": record.get("input_mode", ""),
         "title": record.get("title", ""),
         "authors": record.get("authors", ""),
         "year": record.get("year", ""),
@@ -849,6 +959,7 @@ def materialize_outputs(records_path: Path, summary_csv_path: Path, lines_txt_pa
             handle,
             fieldnames=[
                 "paper_id",
+                "input_mode",
                 "title",
                 "authors",
                 "year",
@@ -880,6 +991,8 @@ def persist_run_config(output_dir: Path, config: ProviderConfig, args: argparse.
         "limit": args.limit,
         "paper_ids": parse_requested_paper_ids(args.paper_id),
         "char_budget": args.char_budget,
+        "input_mode": args.input_mode,
+        "keep_uploaded_files": args.keep_uploaded_files,
         "resume": args.resume,
         "scheduled_count": scheduled_count,
     }
@@ -919,9 +1032,15 @@ def main() -> int:
         base_url=args.base_url,
         api_key_env=args.api_key_env,
         model=args.model,
+        input_mode=args.input_mode,
         max_retries=max(1, args.max_retries),
         concurrency=max(1, args.concurrency),
+        keep_uploaded_files=args.keep_uploaded_files,
     )
+    if args.input_mode == "pdf_direct" and args.provider.lower() != "openai":
+        LOGGER.warning(
+            "input_mode=pdf_direct depends on Files + Responses API compatibility and is only validated against official OpenAI."
+        )
     persist_run_config(output_dir, config, args, scheduled_count=len(pending_pdfs))
 
     LOGGER.info("Scanned %s PDFs; %s pending for this run.", len(scanned_pdfs), len(pending_pdfs))
