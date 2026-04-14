@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,15 @@ SPEC.loader.exec_module(MODULE)
 
 
 class ExtractMetricsBatchTests(unittest.TestCase):
+    def test_sanitize_transport_text_removes_surrogates(self) -> None:
+        text = "abc\ud83d\ude00\x00def"
+        self.assertEqual(MODULE.sanitize_transport_text(text), "abcdef")
+
+    def test_drop_problematic_lines_removes_invalid_line(self) -> None:
+        cleaned, dropped = MODULE.drop_problematic_lines("good line\nbad\ud83dline\nanother good line")
+        self.assertEqual(dropped, 1)
+        self.assertEqual(cleaned, "good line\nanother good line")
+
     def test_parse_filename_metadata_standard(self) -> None:
         metadata = MODULE.parse_filename_metadata(
             "Ali 等 - 2020 - A Virtual Conversational Agent for Teens with Autism Spectrum Disorder.pdf"
@@ -197,6 +207,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
                     "title": "Paper",
                     "authors": "Ali",
                     "year": "2024",
+                    "mental_condition_names": ["depression"],
                     "has_quantitative_metrics": True,
                     "metrics": [
                         {
@@ -216,6 +227,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
                     "title": "",
                     "authors": "",
                     "year": "",
+                    "mental_condition_names": ["anxiety", "depression"],
                     "has_quantitative_metrics": True,
                     "metrics": [
                         {
@@ -236,6 +248,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
         self.assertEqual(merged["title"], "Paper")
         self.assertEqual(merged["authors"], "Ali")
         self.assertEqual(merged["year"], "2024")
+        self.assertEqual(merged["mental_condition_names"], ["depression", "anxiety"])
         self.assertEqual({metric["category"] for metric in merged["metrics"]}, {"Accuracy", "F1"})
         self.assertEqual(merged["evaluation_methods"], ["cross_validation", "independent_test_set"])
         self.assertEqual(merged["confidence"], 0.9)
@@ -260,6 +273,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
                 "title": "Test",
                 "authors": "Ali 等",
                 "year": "2020",
+                "mental_condition_names": ["depression"],
                 "has_quantitative_metrics": False,
                 "metrics": [],
                 "evaluation_methods": [],
@@ -272,6 +286,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
         )
         self.assertEqual(record["evaluation_methods"], ["independent_test_set"])
         self.assertEqual(record["evaluation_method_source"], "explicit_or_fallback")
+        self.assertEqual(record["mental_condition_names"], ["depression"])
         self.assertIn("独立测试集", record["final_line"])
         self.assertEqual(record["extracted_page_count"], 12)
         self.assertEqual(record["sent_page_count"], 8)
@@ -335,6 +350,7 @@ class ExtractMetricsBatchTests(unittest.TestCase):
                 "title": "Test Paper",
                 "authors": "Ali 等",
                 "year": "2020",
+                "mental_condition_names": ["depression", "anxiety"],
                 "pdf_path": "Paper/1/test.pdf",
                 "has_quantitative_metrics": True,
                 "metrics": [
@@ -362,14 +378,35 @@ class ExtractMetricsBatchTests(unittest.TestCase):
             self.assertTrue(summary_text.splitlines()[0].startswith("folder_id,result_line,"))
             self.assertTrue(summary_text.splitlines()[1].startswith("1,"))
             self.assertIn("evaluation_method_source", summary_text.splitlines()[0])
+            self.assertIn("mental_condition_names", summary_text.splitlines()[0])
             self.assertIn("evidence_snippets", summary_text.splitlines()[0])
             self.assertIn("evidence_page_numbers", summary_text.splitlines()[0])
             self.assertIn("context_page_numbers", summary_text.splitlines()[0])
+            self.assertIn("depression, anxiety", summary_text)
             self.assertIn("Accuracy was 0.84.", summary_text)
             self.assertIn(",5,", summary_text)
             self.assertIn("1, 2, 5, 6", summary_text)
             self.assertIn("42000", summary_text)
             self.assertIn("[Ali_2020]", lines_path.read_text(encoding="utf-8"))
+
+    def test_maybe_materialize_outputs_checkpoints_every_ten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            records_path = root / "records.jsonl"
+            summary_path = root / "summary.csv"
+            lines_path = root / "lines.txt"
+            with mock.patch.object(MODULE, "materialize_outputs") as materialize_mock:
+                self.assertFalse(MODULE.maybe_materialize_outputs(9, records_path, summary_path, lines_path))
+                materialize_mock.assert_not_called()
+
+                self.assertTrue(MODULE.maybe_materialize_outputs(10, records_path, summary_path, lines_path))
+                materialize_mock.assert_called_once_with(records_path, summary_path, lines_path)
+
+                materialize_mock.reset_mock()
+                self.assertTrue(
+                    MODULE.maybe_materialize_outputs(3, records_path, summary_path, lines_path, force=True)
+                )
+                materialize_mock.assert_called_once_with(records_path, summary_path, lines_path)
 
 
 if __name__ == "__main__":

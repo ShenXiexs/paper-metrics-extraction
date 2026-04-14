@@ -28,6 +28,7 @@ logging.basicConfig(
 logging.getLogger("pypdf").setLevel(logging.ERROR)
 logging.getLogger("pypdf._reader").setLevel(logging.ERROR)
 LOGGER = logging.getLogger("extract_metrics_batch")
+CHECKPOINT_INTERVAL = 10
 
 ALLOWED_METRIC_CATEGORIES = [
     "Accuracy",
@@ -92,11 +93,12 @@ Core extraction rules:
 3. If multiple models are reported, keep only the best-performing or most emphasized result set.
 4. Ensure strict one-to-one mapping between each metric and each reported value.
 5. If a metric is mentioned but no concrete value is reported, set its value to "Not reported".
-6. Keep model-performance metrics reported for mental-health-related systems, including direct disorder prediction / screening / classification tasks and component-level classification or detection tasks that are part of the system (for example, cognitive distortion classification, risk classification, intent classification within a mental-health chatbot pipeline).
-7. Do NOT extract intervention effectiveness statistics, hypothesis-test outputs, questionnaire score changes, usability scores, p-values, effect sizes, mean differences, or baseline/follow-up scale scores unless they are explicitly used as model-performance metrics.
-8. If the paper does not report any relevant model-performance metrics, set has_quantitative_metrics to false and return an empty metrics array.
-9. Return a single JSON object only. Do not use Markdown. Do not add commentary.
-10. For each extracted metric item, normalize its category to one of these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, or Other:<raw_name>. A paper may contain multiple metric items and multiple categories. Map ROC-AUC / AUROC into AUC. Put PR-AUC, Dice, IoU, MAE, RMSE, MCC, and other predictive metrics into Other:<raw_name> instead of creating new top-level groups.
+6. Also extract the corresponding mental disorder, symptom domain, or mental-health condition name associated with the reported metrics whenever it is explicit in the paper. A paper may contain multiple condition names.
+7. Keep model-performance metrics reported for mental-health-related systems, including direct disorder prediction / screening / classification tasks and component-level classification or detection tasks that are part of the system (for example, cognitive distortion classification, risk classification, intent classification within a mental-health chatbot pipeline).
+8. Do NOT extract intervention effectiveness statistics, hypothesis-test outputs, questionnaire score changes, usability scores, p-values, effect sizes, mean differences, or baseline/follow-up scale scores unless they are explicitly used as model-performance metrics.
+9. If the paper does not report any relevant model-performance metrics, set has_quantitative_metrics to false and return an empty metrics array.
+10. Return a single JSON object only. Do not use Markdown. Do not add commentary.
+11. For each extracted metric item, normalize its category to one of these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, or Other:<raw_name>. A paper may contain multiple metric items and multiple categories. Map ROC-AUC / AUROC into AUC. Put PR-AUC, Dice, IoU, MAE, RMSE, MCC, and other predictive metrics into Other:<raw_name> instead of creating new top-level groups.
 
 For each metric item, normalize its category to one of:
 - Accuracy
@@ -118,6 +120,7 @@ Expected JSON schema:
   "title": "string",
   "authors": "string or array of strings",
   "year": "string or integer",
+  "mental_condition_names": ["depression", "anxiety"],
   "has_quantitative_metrics": true,
   "metrics": [
     {
@@ -149,11 +152,12 @@ Expected JSON schema:
 3. 若有多个模型，只保留论文中表现最优或作者最强调的一组结果。
 4. 必须保证“指标-数值”严格一一对应。
 5. 若提到了某个指标但没有给出具体数值，则该指标的数值写为“未报告数值”。
-6. 允许提取心理健康相关系统中的模型性能指标，包括直接的精神疾病预测/筛查/分类任务，也包括系统内部与心理健康相关的组件级分类或检测任务，例如认知扭曲分类、风险分类、聊天机器人流程中的意图分类等。
-7. 不要提取干预效果统计、假设检验结果、问卷分数变化、可用性分数、p 值、effect size、mean difference、基线/随访量表分数，除非这些量被明确作为模型性能指标使用。
-8. 若论文没有报告相关的模型性能指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
-9. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
-10. 对每一个提取出的指标项，都要把其类别归到这些高层类别之一：Accuracy、AUC、Sensitivity、Specificity、Precision、F1 或 Other:<raw_name>。同一篇论文可以同时包含多个指标项和多个类别。其中 ROC-AUC / AUROC 统一并入 AUC；PR-AUC、Dice、IoU、MAE、RMSE、MCC 等其他预测性能指标统一写为 Other:<raw_name>，不要新增新的一级类别。
+6. 还要提取与这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留，同一篇论文可以有多个名称。
+7. 允许提取心理健康相关系统中的模型性能指标，包括直接的精神疾病预测/筛查/分类任务，也包括系统内部与心理健康相关的组件级分类或检测任务，例如认知扭曲分类、风险分类、聊天机器人流程中的意图分类等。
+8. 不要提取干预效果统计、假设检验结果、问卷分数变化、可用性分数、p 值、effect size、mean difference、基线/随访量表分数，除非这些量被明确作为模型性能指标使用。
+9. 若论文没有报告相关的模型性能指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
+10. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
+11. 对每一个提取出的指标项，都要把其类别归到这些高层类别之一：Accuracy、AUC、Sensitivity、Specificity、Precision、F1 或 Other:<raw_name>。同一篇论文可以同时包含多个指标项和多个类别。其中 ROC-AUC / AUROC 统一并入 AUC；PR-AUC、Dice、IoU、MAE、RMSE、MCC 等其他预测性能指标统一写为 Other:<raw_name>，不要新增新的一级类别。
 
 对每一个指标项，类别标准化为以下之一：
 - Accuracy
@@ -175,6 +179,7 @@ Expected JSON schema:
   "title": "string",
   "authors": "string 或 string 数组",
   "year": "string 或 integer",
+  "mental_condition_names": ["抑郁", "焦虑"],
   "has_quantitative_metrics": true,
   "metrics": [
     {
@@ -231,6 +236,7 @@ class PaperRecord:
     title: str
     authors: str
     year: str
+    mental_condition_names: list[str]
     extracted_page_count: int
     sent_page_count: int
     sent_char_count: int
@@ -295,12 +301,33 @@ def numeric_sort_key(value: str) -> tuple[int, str]:
     return (0, f"{int(value):08d}") if value.isdigit() else (1, value)
 
 
+def sanitize_transport_text(text: str) -> str:
+    if text is None:
+        return ""
+    cleaned = str(text)
+    cleaned = re.sub(r"[\ud800-\udfff]", "", cleaned)
+    cleaned = cleaned.replace("\x00", "")
+    return cleaned.encode("utf-8", errors="ignore").decode("utf-8", errors="ignore")
+
+
+def drop_problematic_lines(text: str) -> tuple[str, int]:
+    kept_lines: list[str] = []
+    dropped = 0
+    for line in str(text or "").splitlines():
+        sanitized = sanitize_transport_text(line)
+        if sanitized != line:
+            dropped += 1
+            continue
+        kept_lines.append(sanitized)
+    return "\n".join(kept_lines), dropped
+
+
 def normalize_whitespace(text: str) -> str:
-    return re.sub(r"\s+", " ", text or "").strip()
+    return re.sub(r"\s+", " ", sanitize_transport_text(text)).strip()
 
 
 def trim_text(text: str, limit: int) -> str:
-    text = text or ""
+    text = sanitize_transport_text(text)
     return text if len(text) <= limit else text[: limit - 3].rstrip() + "..."
 
 
@@ -419,13 +446,16 @@ def extract_front_matter_candidates(first_pages: list[str]) -> dict[str, str]:
 def read_pdf_pages(pdf_path: Path) -> list[str]:
     reader = PdfReader(str(pdf_path))
     pages: list[str] = []
-    for page in reader.pages:
+    for page_number, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ""
         except Exception as exc:  # pragma: no cover - defensive against malformed PDFs
             LOGGER.warning("Page extraction failed for %s: %s", pdf_path, exc)
             text = ""
-        pages.append(normalize_whitespace(text))
+        sanitized_text = sanitize_transport_text(text)
+        if sanitized_text != text:
+            LOGGER.warning("Removed invalid unicode characters from %s page %s", pdf_path, page_number)
+        pages.append(normalize_whitespace(sanitized_text))
     return pages
 
 
@@ -576,10 +606,11 @@ def build_text_mode_prompt(
 请完成以下任务：
 1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+3. 还要导出这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+4. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+6. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 只根据原文提取，不得补全缺失信息。
@@ -607,10 +638,11 @@ Paper info:
 Please do the following:
 1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
-5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+3. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in the paper.
+4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
+6. Also return title, authors, year, and mental_condition_names, preferring explicit paper evidence over filename candidates.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - Extract strictly from the paper text. Do not fill in missing information.
@@ -648,10 +680,11 @@ def build_text_full_mode_prompt(
 请完成以下任务：
 1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+3. 还要导出这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+4. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+6. 同时返回 title、authors、year 和 mental_condition_names，优先依据论文正文，其次参考文件名候选。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 以下文本按页顺序来自论文全文；若因长度限制被截断，也应优先基于已提供的全文顺序文本提取。
@@ -679,10 +712,11 @@ Paper info:
 Please do the following:
 1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
-5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+3. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in the paper.
+4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
+6. Also return title, authors, year, and mental_condition_names, preferring explicit paper evidence over filename candidates.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - The text below is the full paper text in page order, unless truncated due to length limits.
@@ -725,15 +759,16 @@ def build_text_full_chunk_prompt(
 1. 这只是整篇论文按页顺序切分后的第 {chunk_index}/{chunk_count} 块。只提取本块中明确出现的定量评估结果，不要假设其他块中的内容。
 2. 判断本块是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 3. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-4. 只保留本块中主要结果、最优结果、最终结果，或作者明确强调的结果。
-5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+4. 还要导出本块中这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+5. 只保留本块中主要结果、最优结果、最终结果，或作者明确强调的结果。
+6. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 若本块没有任何相关定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
 - 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
 - 不要提取 p 值、效应量、量表前后测分数、均值差、可用性分数等非预测性能结果。
-- title、authors、year 可以使用本块中的明确证据；若本块未出现，可留空，后续会结合首页和文件名补全。
+- title、authors、year、mental_condition_names 可以使用本块中的明确证据；若本块未出现，可留空，后续会结合其他块、首页和文件名补全。
 
 论文文本：
 {context_text}
@@ -757,15 +792,16 @@ Please do the following:
 1. This is chunk {chunk_index}/{chunk_count} from the full paper in page order. Extract only information explicitly present in this chunk. Do not assume content from other chunks.
 2. Decide whether this chunk explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 3. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors within this chunk.
-5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the chunk does not provide enough information.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+4. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in this chunk.
+5. Keep only the main results, best performance, final reported results, or the result emphasized by the authors within this chunk.
+6. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the chunk does not provide enough information.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - If this chunk contains no relevant quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
 - If a metric is mentioned but no concrete value is given, use "Not reported" in values.
 - Do not extract p-values, effect sizes, questionnaire score changes, mean differences, or usability scores as metrics.
-- title, authors, and year may be left empty if they are not explicitly visible in this chunk; they will be reconciled later with front-matter and filename candidates.
+- title, authors, year, and mental_condition_names may be left empty if they are not explicitly visible in this chunk; they will be reconciled later with other chunks, front-matter, and filename candidates.
 
 Paper text:
 {context_text}
@@ -791,10 +827,11 @@ def build_pdf_direct_prompt(
 请完成以下任务：
 1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+3. 还要导出这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+4. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+6. 同时返回 title、authors、year 和 mental_condition_names，优先依据论文正文，其次参考文件名候选。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 所附 PDF 是主信息源，文件名候选仅作辅助参考。
@@ -816,10 +853,11 @@ Paper info:
 Please do the following:
 1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
-5. Also return title, authors, and year, preferring explicit paper evidence over the filename candidates.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+3. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in the paper.
+4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
+6. Also return title, authors, year, and mental_condition_names, preferring explicit paper evidence over the filename candidates.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - The attached PDF is the primary source. Filename candidates are only fallback hints.
@@ -888,15 +926,27 @@ class LLMExtractor:
 
     def extract(self, user_prompt: str, pdf_path: Path | None = None) -> dict[str, Any]:
         last_exc: Exception | None = None
+        current_prompt = sanitize_transport_text(user_prompt)
+        if current_prompt != user_prompt:
+            LOGGER.warning("Removed invalid unicode characters from prompt before API request.")
         for attempt in range(1, self.config.max_retries + 1):
             try:
                 if self.config.input_mode == "pdf_direct":
                     if pdf_path is None:
                         raise ValueError("pdf_path is required when input_mode=pdf_direct")
-                    return self._extract_once_pdf_direct(user_prompt, pdf_path)
-                return self._extract_once_text(user_prompt)
+                    return self._extract_once_pdf_direct(current_prompt, pdf_path)
+                return self._extract_once_text(current_prompt)
             except Exception as exc:  # pragma: no cover - retry path depends on live API
                 last_exc = exc
+                if isinstance(exc, UnicodeEncodeError):
+                    reduced_prompt, dropped_lines = drop_problematic_lines(current_prompt)
+                    if dropped_lines > 0 and reduced_prompt.strip():
+                        current_prompt = reduced_prompt
+                        LOGGER.warning(
+                            "Dropped %s problematic prompt lines after UnicodeEncodeError for model %s.",
+                            dropped_lines,
+                            self.config.model,
+                        )
                 if attempt >= self.config.max_retries:
                     break
                 sleep_seconds = min(2 ** (attempt - 1), 16)
@@ -1050,6 +1100,10 @@ def normalize_string_list(value: Any) -> list[str]:
         if cleaned:
             normalized.append(cleaned)
     return normalized
+
+
+def normalize_condition_names(value: Any) -> list[str]:
+    return list(dict.fromkeys(normalize_string_list(value)))
 
 
 def normalize_page_numbers(value: Any) -> list[int]:
@@ -1401,6 +1455,7 @@ def merge_chunk_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any]:
     merged_metrics: list[dict[str, Any]] = []
     merged_evidence: list[dict[str, Any]] = []
     merged_methods: list[str] = []
+    merged_condition_names: list[str] = []
     title = ""
     authors = ""
     year = ""
@@ -1413,6 +1468,7 @@ def merge_chunk_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any]:
             authors = normalize_authors(payload.get("authors"))
         if not year:
             year = normalize_year(payload.get("year"))
+        merged_condition_names.extend(normalize_condition_names(payload.get("mental_condition_names")))
         chunk_metrics = normalize_metric_items(payload.get("metrics"))
         if chunk_metrics:
             merged_metrics.extend(chunk_metrics)
@@ -1430,6 +1486,7 @@ def merge_chunk_payloads(payloads: list[dict[str, Any]]) -> dict[str, Any]:
         "title": title,
         "authors": authors,
         "year": year,
+        "mental_condition_names": list(dict.fromkeys(merged_condition_names)),
         "has_quantitative_metrics": bool(merged_metrics),
         "metrics": merged_metrics,
         "evaluation_methods": merged_methods,
@@ -1500,6 +1557,7 @@ def build_paper_record(
     if not metrics and fallback_metrics:
         metrics = normalize_metric_items(fallback_metrics)
     has_quantitative_metrics = bool(metrics)
+    mental_condition_names = normalize_condition_names(llm_payload.get("mental_condition_names"))
 
     methods = normalize_evaluation_methods(llm_payload.get("evaluation_methods"))
     if methods == ["not_reported"] and method_hints:
@@ -1520,6 +1578,7 @@ def build_paper_record(
         title=title,
         authors=authors,
         year=year,
+        mental_condition_names=mental_condition_names,
         extracted_page_count=extracted_page_count,
         sent_page_count=sent_page_count,
         sent_char_count=sent_char_count,
@@ -1737,6 +1796,7 @@ def flatten_record_for_csv(record: dict[str, Any]) -> dict[str, Any]:
         "title": record.get("title", ""),
         "authors": record.get("authors", ""),
         "year": record.get("year", ""),
+        "mental_condition_names": ", ".join(normalize_condition_names(record.get("mental_condition_names"))),
         "pdf_path": record.get("pdf_path", ""),
         "has_quantitative_metrics": record.get("has_quantitative_metrics", False),
         "metric_categories": ", ".join(dict.fromkeys(metric.get("category", "") for metric in metrics if metric.get("category"))),
@@ -1769,6 +1829,7 @@ def materialize_outputs(records_path: Path, summary_csv_path: Path, lines_txt_pa
                 "title",
                 "authors",
                 "year",
+                "mental_condition_names",
                 "pdf_path",
                 "has_quantitative_metrics",
                 "metric_categories",
@@ -1789,6 +1850,22 @@ def materialize_outputs(records_path: Path, summary_csv_path: Path, lines_txt_pa
     with lines_txt_path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(str(record.get("final_line", "")).strip() + "\n")
+
+
+def maybe_materialize_outputs(
+    processed_count: int,
+    records_path: Path,
+    summary_csv_path: Path,
+    lines_txt_path: Path,
+    *,
+    force: bool = False,
+) -> bool:
+    if not force and processed_count <= 0:
+        return False
+    if not force and processed_count % CHECKPOINT_INTERVAL != 0:
+        return False
+    materialize_outputs(records_path, summary_csv_path, lines_txt_path)
+    return True
 
 
 def persist_run_config(output_dir: Path, config: ProviderConfig, args: argparse.Namespace, scheduled_count: int) -> None:
@@ -1865,30 +1942,41 @@ def main() -> int:
     write_lock = threading.Lock()
     total = len(pending_pdfs)
 
-    with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
-        future_map = {
-            executor.submit(process_one_paper, pdf_path, extractor, args.char_budget): pdf_path
-            for pdf_path in pending_pdfs
-        }
-        for index, future in enumerate(as_completed(future_map), start=1):
-            pdf_path = future_map[future]
-            try:
-                record, error = future.result()
-                if record is not None:
-                    append_jsonl(records_path, record, write_lock)
-                    LOGGER.info("[%s/%s] OK %s", index, total, pdf_path.parent.name)
-                else:
-                    append_jsonl(errors_path, error or {}, write_lock)
-                    LOGGER.error("[%s/%s] ERROR %s", index, total, pdf_path.parent.name)
-            except Exception as exc:  # pragma: no cover - defensive around future handling
-                append_jsonl(
-                    errors_path,
-                    {"paper_id": pdf_path.parent.name, "pdf_path": str(pdf_path), "error": str(exc)},
-                    write_lock,
-                )
-                LOGGER.exception("[%s/%s] FUTURE ERROR %s", index, total, pdf_path.parent.name)
+    processed_count = 0
+    try:
+        with ThreadPoolExecutor(max_workers=config.concurrency) as executor:
+            future_map = {
+                executor.submit(process_one_paper, pdf_path, extractor, args.char_budget): pdf_path
+                for pdf_path in pending_pdfs
+            }
+            for index, future in enumerate(as_completed(future_map), start=1):
+                pdf_path = future_map[future]
+                try:
+                    record, error = future.result()
+                    if record is not None:
+                        append_jsonl(records_path, record, write_lock)
+                        LOGGER.info("[%s/%s] OK %s", index, total, pdf_path.parent.name)
+                    else:
+                        append_jsonl(errors_path, error or {}, write_lock)
+                        LOGGER.error("[%s/%s] ERROR %s", index, total, pdf_path.parent.name)
+                except Exception as exc:  # pragma: no cover - defensive around future handling
+                    append_jsonl(
+                        errors_path,
+                        {"paper_id": pdf_path.parent.name, "pdf_path": str(pdf_path), "error": str(exc)},
+                        write_lock,
+                    )
+                    LOGGER.exception("[%s/%s] FUTURE ERROR %s", index, total, pdf_path.parent.name)
+                finally:
+                    processed_count += 1
+                    if maybe_materialize_outputs(processed_count, records_path, summary_csv_path, lines_txt_path):
+                        LOGGER.info(
+                            "Checkpointed outputs after %s processed papers: %s",
+                            processed_count,
+                            output_dir.resolve(),
+                        )
+    finally:
+        maybe_materialize_outputs(processed_count, records_path, summary_csv_path, lines_txt_path, force=True)
 
-    materialize_outputs(records_path, summary_csv_path, lines_txt_path)
     LOGGER.info("Finished. Results written to %s", output_dir.resolve())
     return 0
 

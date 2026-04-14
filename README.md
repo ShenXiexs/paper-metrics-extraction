@@ -18,6 +18,7 @@ In both modes, the script extracts:
 - whether the paper reports quantitative predictive performance metrics
 - which metrics are reported
 - the reported values
+- the associated mental disorder, symptom domain, or mental-health condition names when explicitly stated
 - the evaluation method
 - basic paper metadata such as title, authors, and year
 
@@ -177,17 +178,20 @@ Each run writes to `results/<run_name>/`:
 - `errors.jsonl`: per-paper failures that did not stop the batch
 - `run_config.json`: run-time configuration snapshot
 
+`summary.csv` and `lines.txt` are checkpointed during the run. The script rebuilds them after every 10 processed papers and once again at the end, so long runs do not wait until the very last paper before producing reviewable outputs.
+
 The structured outputs also include context diagnostics:
 
 - `extracted_page_count`
 - `sent_page_count`
 - `sent_char_count`
 - `truncated`
+- `mental_condition_names`
 - `evidence_snippets`
 - `evidence_page_numbers`
 - `context_page_numbers`
 
-These fields help you judge whether `text` or `text_full` sent only part of the extracted paper text, and they expose the evidence snippets/pages used for manual checking. In `text_full_chunked`, all extracted pages are covered unless a single page itself exceeds the chunk budget.
+These fields help you judge whether `text` or `text_full` sent only part of the extracted paper text, expose the extracted mental-health condition names, and preserve the evidence snippets/pages used for manual checking. In `text_full_chunked`, all extracted pages are covered unless a single page itself exceeds the chunk budget.
 
 ## CLI Parameters
 

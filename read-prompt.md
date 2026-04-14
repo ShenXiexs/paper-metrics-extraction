@@ -23,11 +23,12 @@
 
 ### V0
 
-请从附件论文中提取三个信息：
+请从附件论文中提取四个信息：
 
 1. 报告了哪些定量指标（从以下列表中勾选：Accuracy, AUC, Sensitivity, Specificity, Precision, F1, 其他____）
 2. 这些指标的具体数值是多少？
-3. 用了什么评估方法（交叉验证/独立测试集/外部验证）？
+3. 对应的精神疾病、症状维度或心理健康问题名称是什么？
+4. 用了什么评估方法（交叉验证/独立测试集/外部验证）？
 
 如果论文没有报告任何定量指标，请直接回复“无定量指标”。
 
@@ -49,7 +50,11 @@
    - 只提取“主要结果（main results / best performance）”
    - 若有多个模型，仅保留论文中最优结果或作者强调的结果
    - 若未报告具体数值，标注为“未报告数值”
-3. 评估方法（可多选）：
+3. 对应的精神疾病、症状维度或心理健康问题名称（可多选）：
+
+   - 如 depression、anxiety、PTSD、cognitive distortion 等
+   - 只保留论文原文明确提到的名称
+4. 评估方法（可多选）：
 
    - Cross-validation（如 k-fold）
    - Train/Validation/Test split（独立测试集）
@@ -88,7 +93,11 @@ Please extract the following:
    - Only extract the main results (e.g., best performance or final reported results)
    - If multiple models are reported, only keep the best-performing or most emphasized results
    - If a metric is mentioned but no value is reported, mark it as "Not reported"
-3. Evaluation method(s) (multiple allowed):
+3. Corresponding mental disorder, symptom domain, or mental-health condition name(s) (multiple allowed):
+
+   - Examples: depression, anxiety, PTSD, cognitive distortion
+   - Keep only names that are explicit in the paper
+4. Evaluation method(s) (multiple allowed):
 
    - Cross-validation (e.g., k-fold)
    - Train/Validation/Test split (independent test set)
@@ -158,11 +167,12 @@ Core extraction rules:
 3. If multiple models are reported, keep only the best-performing or most emphasized result set.
 4. Ensure strict one-to-one mapping between each metric and each reported value.
 5. If a metric is mentioned but no concrete value is reported, set its value to "Not reported".
-6. Keep model-performance metrics reported for mental-health-related systems, including direct disorder prediction / screening / classification tasks and component-level classification or detection tasks that are part of the system (for example, cognitive distortion classification, risk classification, intent classification within a mental-health chatbot pipeline).
-7. Do NOT extract intervention effectiveness statistics, hypothesis-test outputs, questionnaire score changes, usability scores, p-values, effect sizes, mean differences, or baseline/follow-up scale scores unless they are explicitly used as model-performance metrics.
-8. If the paper does not report any relevant model-performance metrics, set has_quantitative_metrics to false and return an empty metrics array.
-9. Return a single JSON object only. Do not use Markdown. Do not add commentary.
-10. For each extracted metric item, normalize its category to one of these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, or Other:<raw_name>. A paper may contain multiple metric items and multiple categories. Map ROC-AUC / AUROC into AUC. Put PR-AUC, Dice, IoU, MAE, RMSE, MCC, and other predictive metrics into Other:<raw_name> instead of creating new top-level groups.
+6. Also extract the corresponding mental disorder, symptom domain, or mental-health condition name associated with the reported metrics whenever it is explicit in the paper. A paper may contain multiple condition names.
+7. Keep model-performance metrics reported for mental-health-related systems, including direct disorder prediction / screening / classification tasks and component-level classification or detection tasks that are part of the system (for example, cognitive distortion classification, risk classification, intent classification within a mental-health chatbot pipeline).
+8. Do NOT extract intervention effectiveness statistics, hypothesis-test outputs, questionnaire score changes, usability scores, p-values, effect sizes, mean differences, or baseline/follow-up scale scores unless they are explicitly used as model-performance metrics.
+9. If the paper does not report any relevant model-performance metrics, set has_quantitative_metrics to false and return an empty metrics array.
+10. Return a single JSON object only. Do not use Markdown. Do not add commentary.
+11. For each extracted metric item, normalize its category to one of these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, or Other:<raw_name>. A paper may contain multiple metric items and multiple categories. Map ROC-AUC / AUROC into AUC. Put PR-AUC, Dice, IoU, MAE, RMSE, MCC, and other predictive metrics into Other:<raw_name> instead of creating new top-level groups.
 
 For each metric item, normalize its category to one of:
 - Accuracy
@@ -184,6 +194,7 @@ Expected JSON schema:
   "title": "string",
   "authors": "string or array of strings",
   "year": "string or integer",
+  "mental_condition_names": ["depression", "anxiety"],
   "has_quantitative_metrics": true,
   "metrics": [
     {
@@ -219,11 +230,12 @@ Expected JSON schema:
 3. 若有多个模型，只保留论文中表现最优或作者最强调的一组结果。
 4. 必须保证“指标-数值”严格一一对应。
 5. 若提到了某个指标但没有给出具体数值，则该指标的数值写为“未报告数值”。
-6. 允许提取心理健康相关系统中的模型性能指标，包括直接的精神疾病预测/筛查/分类任务，也包括系统内部与心理健康相关的组件级分类或检测任务，例如认知扭曲分类、风险分类、聊天机器人流程中的意图分类等。
-7. 不要提取干预效果统计、假设检验结果、问卷分数变化、可用性分数、p 值、effect size、mean difference、基线/随访量表分数，除非这些量被明确作为模型性能指标使用。
-8. 若论文没有报告相关的模型性能指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
-9. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
-10. 对每一个提取出的指标项，都要把其类别归到这些高层类别之一：Accuracy、AUC、Sensitivity、Specificity、Precision、F1 或 Other:<raw_name>。同一篇论文可以同时包含多个指标项和多个类别。其中 ROC-AUC / AUROC 统一并入 AUC；PR-AUC、Dice、IoU、MAE、RMSE、MCC 等其他预测性能指标统一写为 Other:<raw_name>，不要新增新的一级类别。
+6. 还要提取与这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留，同一篇论文可以有多个名称。
+7. 允许提取心理健康相关系统中的模型性能指标，包括直接的精神疾病预测/筛查/分类任务，也包括系统内部与心理健康相关的组件级分类或检测任务，例如认知扭曲分类、风险分类、聊天机器人流程中的意图分类等。
+8. 不要提取干预效果统计、假设检验结果、问卷分数变化、可用性分数、p 值、effect size、mean difference、基线/随访量表分数，除非这些量被明确作为模型性能指标使用。
+9. 若论文没有报告相关的模型性能指标，则将 has_quantitative_metrics 设为 false，并返回空 metrics 数组。
+10. 必须只返回一个 JSON 对象，不要使用 Markdown，不要添加解释性文字。
+11. 对每一个提取出的指标项，都要把其类别归到这些高层类别之一：Accuracy、AUC、Sensitivity、Specificity、Precision、F1 或 Other:<raw_name>。同一篇论文可以同时包含多个指标项和多个类别。其中 ROC-AUC / AUROC 统一并入 AUC；PR-AUC、Dice、IoU、MAE、RMSE、MCC 等其他预测性能指标统一写为 Other:<raw_name>，不要新增新的一级类别。
 
 对每一个指标项，类别标准化为以下之一：
 - Accuracy
@@ -245,6 +257,7 @@ Expected JSON schema:
   "title": "string",
   "authors": "string 或 string 数组",
   "year": "string 或 integer",
+  "mental_condition_names": ["抑郁", "焦虑"],
   "has_quantitative_metrics": true,
   "metrics": [
     {
@@ -291,10 +304,11 @@ Paper info:
 Please do the following:
 1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
-5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+3. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in the paper.
+4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
+6. Also return title, authors, year, and mental_condition_names, preferring explicit paper evidence over filename candidates.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - Extract strictly from the paper text. Do not fill in missing information.
@@ -325,10 +339,11 @@ Paper text:
 请完成以下任务：
 1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+3. 还要导出这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+4. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+6. 同时返回 title、authors、year 和 mental_condition_names，优先依据论文正文，其次参考文件名候选。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 只根据原文提取，不得补全缺失信息。
@@ -361,10 +376,11 @@ Paper info:
 Please do the following:
 1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
-5. Also return title, authors, and year, preferring explicit paper evidence over filename candidates.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+3. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in the paper.
+4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
+6. Also return title, authors, year, and mental_condition_names, preferring explicit paper evidence over filename candidates.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - The text below is the full paper text in page order, unless truncated due to length limits.
@@ -395,10 +411,11 @@ Paper text:
 请完成以下任务：
 1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+3. 还要导出这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+4. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+6. 同时返回 title、authors、year 和 mental_condition_names，优先依据论文正文，其次参考文件名候选。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 以下文本按页顺序来自论文全文；若因长度限制被截断，也应优先基于已提供的全文顺序文本提取。
@@ -434,15 +451,16 @@ Please do the following:
 1. This is chunk {chunk_index}/{chunk_count} from the full paper in page order. Extract only information explicitly present in this chunk. Do not assume content from other chunks.
 2. Decide whether this chunk explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 3. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors within this chunk.
-5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the chunk does not provide enough information.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+4. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in this chunk.
+5. Keep only the main results, best performance, final reported results, or the result emphasized by the authors within this chunk.
+6. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the chunk does not provide enough information.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - If this chunk contains no relevant quantitative metrics, return has_quantitative_metrics=false and an empty metrics array.
 - If a metric is mentioned but no concrete value is given, use "Not reported" in values.
 - Do not extract p-values, effect sizes, questionnaire score changes, mean differences, or usability scores as metrics.
-- title, authors, and year may be left empty if they are not explicitly visible in this chunk; they will be reconciled later with front-matter and filename candidates.
+- title, authors, year, and mental_condition_names may be left empty if they are not explicitly visible in this chunk; they will be reconciled later with other chunks, front-matter, and filename candidates.
 
 Paper text:
 {context_text}
@@ -469,15 +487,16 @@ Paper text:
 1. 这只是整篇论文按页顺序切分后的第 {chunk_index}/{chunk_count} 块。只提取本块中明确出现的定量评估结果，不要假设其他块中的内容。
 2. 判断本块是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 3. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-4. 只保留本块中主要结果、最优结果、最终结果，或作者明确强调的结果。
-5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+4. 还要导出本块中这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+5. 只保留本块中主要结果、最优结果、最终结果，或作者明确强调的结果。
+6. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 若本块没有任何相关定量指标，请返回 has_quantitative_metrics=false 和空 metrics。
 - 若指标被提到但没有具体数值，则 values 中写“未报告数值”。
 - 不要提取 p 值、效应量、量表前后测分数、均值差、可用性分数等非预测性能结果。
-- title、authors、year 可以使用本块中的明确证据；若本块未出现，可留空，后续会结合首页和文件名补全。
+- title、authors、year、mental_condition_names 可以使用本块中的明确证据；若本块未出现，可留空，后续会结合其他块、首页和文件名补全。
 
 论文文本：
 {context_text}
@@ -500,10 +519,11 @@ Paper info:
 Please do the following:
 1. Decide whether the paper explicitly reports quantitative model-evaluation metrics for mental disorder or mental-health-related systems, including direct prediction/classification/screening tasks and component-level classification or detection tasks used inside the system.
 2. If yes, extract the metrics and their corresponding values with strict one-to-one mapping.
-3. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
-4. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
-5. Also return title, authors, and year, preferring explicit paper evidence over the filename candidates.
-6. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
+3. Also extract the mental disorder, symptom domain, or mental-health condition name associated with those reported metrics whenever it is explicit in the paper.
+4. Keep only the main results, best performance, final reported results, or the result emphasized by the authors.
+5. Evaluation methods may include one or more of: cross_validation, independent_test_set, external_validation. Use not_reported only when the paper does not provide enough information.
+6. Also return title, authors, year, and mental_condition_names, preferring explicit paper evidence over the filename candidates.
+7. Only use these high-level metric groups: Accuracy, AUC, Sensitivity, Specificity, Precision, F1, Other:<raw_name>. Map ROC-AUC / AUROC into AUC. Put other predictive metrics into Other.
 
 Important:
 - The attached PDF is the primary source. Filename candidates are only fallback hints.
@@ -528,10 +548,11 @@ Important:
 请完成以下任务：
 1. 判断论文是否明确报告了与精神疾病或精神健康相关的模型定量评估指标，包括直接的预测、分类、筛查、识别、检测任务，也包括系统内部与心理健康相关的组件级分类或检测任务。
 2. 若有，请提取指标及其对应数值，并保证指标和数值一一对应。
-3. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
-4. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
-5. 同时返回 title、authors、year，优先依据论文正文，其次参考文件名候选。
-6. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
+3. 还要导出这些指标对应的精神疾病、症状维度或心理健康问题名称；如果原文明确提到，则全部保留。
+4. 只保留主要结果、最优结果、最终结果，或作者明确强调的结果。
+5. 评估方法可以多选：cross_validation、independent_test_set、external_validation；如果文中没有明确或可判断的方法信息，则写 not_reported。
+6. 同时返回 title、authors、year 和 mental_condition_names，优先依据论文正文，其次参考文件名候选。
+7. 指标高层类别只允许：Accuracy、AUC、Sensitivity、Specificity、Precision、F1、Other:<raw_name>。其中 ROC-AUC / AUROC 归入 AUC，其他预测性指标归入 Other。
 
 附加说明：
 - 所附 PDF 是主信息源，文件名候选仅作辅助参考。
